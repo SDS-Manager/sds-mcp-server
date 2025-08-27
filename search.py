@@ -1,7 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 from cache import redis_client
 from typing import Dict, Any
-from config import BACKEND_URL
+from config import BACKEND_URL, SDS_HEADER_NAME
 import logging
 import requests
 import uuid
@@ -40,11 +40,12 @@ async def login(access_token: str) -> Dict[str, Any]:
             "instruction": "Please provide a valid JWT access token"
         }
 
-    headers = {"Authorization": f"JWT {access_token}"}
+    headers = {SDS_HEADER_NAME: f"{access_token}"}
 
     try:
         response = requests.get(
-            f"{BACKEND_URL}/user/", headers=headers, timeout=10)
+            f"{BACKEND_URL}/user/", headers=headers, timeout=10
+        )
 
         if response.status_code == 200:
             user_info = response.json()
@@ -63,7 +64,7 @@ async def login(access_token: str) -> Dict[str, Any]:
                     "email": user_info.get("email"),
                     "name": user_info.get("name", "User")
                 },
-                "available_tools": ["search", "get_location_structure"],
+                "available_tools": ["search"],
                 "session_id": session_id
             }
         elif response.status_code == 401:
@@ -122,11 +123,11 @@ async def search(query: str, session_id: str, page: int = 1, page_size: int = 10
             "instruction": "Session expired. Please login again using the login tool."
         }
 
-    headers = {"Authorization": f"JWT {info.get('access_token')}"}
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
 
     try:
         response = requests.get(
-            f"{BACKEND_URL}/v2/locations/my-sds?search={query}&page={page}&page_size={page_size}&order_by=product_name&without_linked_sds=false",
+            f"{BACKEND_URL}/substance/?search={query}&page={page}&page_size={page_size}",
             headers=headers,
             timeout=10
         )
@@ -161,78 +162,6 @@ async def search(query: str, session_id: str, page: int = 1, page_size: int = 10
 
 
 @mcp.tool(
-    description="Fetch location/folder structure for the authenticated user. Requires authentication via login tool first."
-)
-async def get_location_structure(session_id: str) -> Dict[str, Any]:
-    """
-    Retrieve the hierarchical location/folder structure for managing SDS documents.
-
-    REQUIRES: User must be authenticated using the login tool first.
-
-    Returns:
-        Dictionary containing:
-        - status: Success or error status
-        - locations: Hierarchical structure of folders and locations
-        - Or error information if authentication failed
-    """
-
-    if not session_id:
-        return {
-            "status": "error",
-            "error": "No active session found",
-            "instruction": "Please login first using the login tool with your access token"
-        }
-
-    access_token = redis_client.get(f"sds_mcp:{session_id}")
-    if not access_token:
-        return {
-            "status": "error",
-            "error": "Access token not found in session",
-            "instruction": "Session expired. Please login again using the login tool."
-        }
-
-    headers = {"Authorization": f"JWT {access_token}"}
-
-    try:
-        response = requests.get(
-            f"{BACKEND_URL}/locations/foldersStructureGrantAccess",
-            headers=headers,
-            timeout=10
-        )
-
-        if response.status_code == 200:
-            data = response.json()
-            locations = data.get("all", [])
-            return {
-                "status": "success",
-                "locations": locations,
-                "count": len(locations)
-            }
-        elif response.status_code == 401:
-            redis_client.delete(f"sds_mcp:{session_id}")
-            return {
-                "status": "error",
-                "error": "Authentication expired",
-                "instruction": "Your session has expired. Please login again with your access token."
-            }
-        else:
-            redis_client.delete(f"sds_mcp:{session_id}")
-            return {
-                "status": "error",
-                "error": f"Failed to fetch location structure with status {response.status_code}",
-                "instruction": "Unable to retrieve location structure. Please try again."
-            }
-    except requests.exceptions.RequestException as e:
-        redis_client.delete(f"sds_mcp:{session_id}")
-        return {
-            "status": "error",
-            "error": f"Connection error: {str(e)}",
-            "instruction": "Failed to connect to location service. Please try again."
-        }
-
-
-# Optional: Add a tool to check authentication status
-@mcp.tool(
     description="Check current authentication status and session information"
 )
 async def check_auth_status(session_id: str) -> Dict[str, Any]:
@@ -253,7 +182,6 @@ async def check_auth_status(session_id: str) -> Dict[str, Any]:
     info = redis_client.get(f"sds_mcp:{session_id}")
 
     if info:
-        user_id = info.get("user_id")
         return info
     else:
         return {
