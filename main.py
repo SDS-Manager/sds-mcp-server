@@ -4,6 +4,8 @@ from search import mcp as search_mcp
 from config import PORT
 
 # Create a combined lifespan to manage both session managers
+
+
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     async with contextlib.AsyncExitStack() as stack:
@@ -11,8 +13,21 @@ async def lifespan(app: FastAPI):
         yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(
+    title="SDS Manager",
+    description="SDS Manager MCP Server with Authentication",
+    version="0.1.0",
+    lifespan=lifespan
+)
+
+# Mount search MCP
 app.mount("/search", search_mcp.streamable_http_app())
+
+
+@app.get("/")
+async def root():
+    """Redirect to login page"""
+    return {"message": "SDS Manager API", "login": "/auth/login"}
 
 
 if __name__ == "__main__":

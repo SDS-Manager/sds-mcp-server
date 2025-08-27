@@ -37,6 +37,10 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    BACKEND_URL=http://localhost:8000/api
    ```
 
+3. **Set up Redis server:**
+   Make sure you have Redis running locally or update the Redis configuration in your `.env` file to point to your Redis instance.
+
+
 ### Running the Server
 
 #### Option 1: Basic MCP Server
@@ -54,56 +58,3 @@ uvicorn main:app --host 0.0.0.0 --port 10000
 The server will be available at:
 - **MCP Endpoint:** `http://localhost:10000/search/mcp`
 - **Main App:** `http://localhost:10000`
-
-
-
-### Available Tools
-
-Note: This server is stateless for HTTP usage. Pass your SDS access token on every call via the `access_token` parameter.
-
-#### 1. `search(access_token: str, query: str)`
-- **Purpose:** Search customer SDS documents
-- **Parameters:**
-  - `access_token` (string): SDS Manager JWT (e.g., obtained from your app)
-  - `query` (string): Search text
-- **Returns:** `{ results: [...] }` where `results` is the API result list
-
-Example call (conceptual):
-```json
-{
-  "tool": "search",
-  "arguments": {
-    "access_token": "<JWT>",
-    "query": "acetone"
-  }
-}
-```
-
-#### 2. `fetch(access_token: str, id: str)`
-- **Purpose:** Fetch a specific customer SDS document by ID
-- **Parameters:**
-  - `access_token` (string): SDS Manager JWT
-  - `id` (string): SDS document identifier
-- **Returns:** The SDS document payload from the API
-
-Example call (conceptual):
-```json
-{
-  "tool": "fetch",
-  "arguments": {
-    "access_token": "<JWT>",
-    "id": "12345"
-  }
-}
-```
-
-### Using with ChatGPT (GPTs) / MCP Clients
-
-1. Ensure the server is running and reachable at `http://localhost:10000/search/mcp`.
-2. In ChatGPT (with MCP support) or another MCP-compatible client, add a new MCP server connection pointing to that URL.
-3. The client will discover two tools: `search` and `fetch`.
-4. When invoking either tool, include your SDS `access_token` in the arguments. No separate `authenticate` or session handling is required.
-
-
-
-

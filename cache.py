@@ -1,5 +1,6 @@
 import redis
 from config import REDIS_HOST, REDIS_PORT, REDIS_DB, REDIS_PASSWORD, REDIS_TTL
+import json
 
 
 class RedisClient:
@@ -16,12 +17,20 @@ class RedisClient:
 
     def get(self, key: str) -> str:
         """ """
-        return self._client.get(key)
-    
-    def set(self, key: str, value: str):
+        res = self._client.get(key)
+
+        if res:
+            return json.loads(res.decode("utf-8"))
+        return None
+
+    def set(self, key: str, value: dict):
         """ """
-        self._client.set(key, value, ex=REDIS_TTL)
-    
+        self._client.set(key, json.dumps(value), ex=REDIS_TTL)
+
+    def setex(self, key: str, time: int, value: str):
+        """Set key with expiration time in seconds"""
+        self._client.setex(key, time, value)
+
     def delete(self, key: str):
         """ """
         self._client.delete(key)
