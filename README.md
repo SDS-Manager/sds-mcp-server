@@ -33,8 +33,8 @@ curl -LsSf https://astral.sh/uv/install.sh | sh
    PORT=10000
    SECRET_KEY=your_secret_key_here
 
-   # SDS Manager Backend (defaults to http://localhost:8000/api)
-   BACKEND_URL=http://localhost:8000/api
+   # SDS Manager Backend (defaults to http://localhost:8000/mcp)
+   BACKEND_URL=http://localhost:8000/mcp
    ```
 
 3. **Set up Redis server:**

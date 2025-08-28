@@ -13,5 +13,5 @@ PORT = int(os.getenv("PORT", 10000))
 
 SECRET_KEY = os.getenv("SECRET_KEY")
 
-BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000/api")
+BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000/mcp")
 SDS_HEADER_NAME = os.getenv("SDS_HEADER_NAME", "X-MCP-API-KEY")
