@@ -1,6 +1,6 @@
 from mcp.server.fastmcp import FastMCP
 from cache import redis_client
-from typing import Dict, Any
+from typing import Dict, Any, List, Optional
 from config import BACKEND_URL, SDS_HEADER_NAME
 import logging
 import requests
@@ -189,4 +189,117 @@ async def check_auth_status(session_id: str) -> Dict[str, Any]:
             "authenticated": False,
             "instruction": "Please use the login tool with your access token to authenticate.",
             "example": "login(access_token='your_jwt_token_here')"
+        }
+
+
+@mcp.tool()
+async def get_location(session_id: str) -> List[Dict[str, Any]]:
+    """
+    Get location tree list for the current user.
+
+    REQUIRES: User must be authenticated using the login tool first.
+    RETURN: A tree (similar to a tree structure in a file system) of locations constructed from an array of root location with the following structure:
+        - id: Unique location identifier
+        - name: Location name
+        - children: Array of child locations
+    """
+
+    if not session_id:
+        return {
+            "status": "not_initialized",
+            "authenticated": False,
+            "instruction": "You haven't logged in yet. Please provide me your access token to authenticate."
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+
+    try:
+        response = requests.get(
+            f"{BACKEND_URL}/location/",
+            headers=headers,
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        else:
+            return {
+                "status": "error",
+                "error": f"Get location structure error with status {response.status_code}",
+                "instruction": "Failed to get location structure. Please try again or contact support."
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
+
+
+@mcp.tool()
+async def add_location(session_id: str, name: str, parent_department_id: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Add new location.
+
+    REQUIRES: User must be authenticated using the login tool first.
+    ARGUMENTS:
+        - name: Location name
+        - parent_department_id: Parent location id (Optional)
+    RETURN: A dictionary of the newly added location
+
+    When user not mentioning parent location, ask user to clarify whether it is root location or not.
+    - If it is root location, parent_department_id is None.
+    - If it is not root location, ask user to provide parent location.
+    When user provide only location name, Get id from get_location tool and convert to string.
+    After checking from get_location tool, if multiple locations with same name, ask user to choose.
+    """
+    if not session_id:
+        return {
+            "status": "not_initialized",
+            "authenticated": False,
+            "instruction": "You haven't logged in yet. Please provide me your access token to authenticate."
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+
+    try:
+        response = requests.post(
+            f"{BACKEND_URL}/location/",
+            headers=headers,
+            json={
+                "name": name,
+                "parent_department_id": parent_department_id
+            },
+            timeout=10
+        )
+
+        if response.status_code == 201:
+            return response.json()
+        else:
+            return {
+                "status": "error",
+                "error": f"Add location error with status {response.status_code}",
+                "instruction": "Failed to add location. Please try again or contact support."
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
         }
