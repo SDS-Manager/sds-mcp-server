@@ -1,0 +1,15 @@
+[project]
+name = "mcp-sds-manager"
+version = "0.1.0"
+description = "SDS Manager MCP server"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "fastapi>=0.115.12",
+    "mcp[cli]>=1.9.3",
+    "python-dotenv>=1.1.0",
+    "redis>=5.0.0",
+    "requests>=2.31.0",
+    "python-json-logger>=2.0.7",
+    "python-dotenv>=1.1.0",
+]
