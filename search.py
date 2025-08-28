@@ -72,13 +72,14 @@ async def login(access_token: str) -> Dict[str, Any]:
                 "user_info": {
                     "id": user_info.get("id"),
                     "email": user_info.get("email"),
-                    "name": user_info.get("name", "User")
+                    "name": user_info.get("first_name", "") + " " + user_info.get("last_name", "")
                 },
                 "session_id": session_id,
                 "available_actions": {
                     "search_options": [
                         "Search Your Customer Library - Find SDS documents in your organization's inventory",
-                        "Search Global Database - Find SDS documents from the broader global database"
+                        "Search Global Database - Find SDS documents from the broader global database",
+                        "Search SDS with Ingredients - Find SDS documents with specific ingredients"
                     ],
                     "management_options": [
                         "View Your Locations - See your organization's location/department structure",
@@ -775,6 +776,223 @@ async def add_location(session_id: str, name: str, parent_department_id: Optiona
                 "error": f"Add location error with status {response.status_code}",
                 "instruction": "Failed to add location. Please try again or contact support."
             }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
+
+
+@mcp.tool(
+    description="Get detailed information about an SDS substance in your inventory. Requires authentication via login tool first."
+)
+async def retrieve_substance_detail(substance_id: str, session_id: str) -> Dict[str, Any]:
+    """
+    Get comprehensive details about a specific SDS substance in your organization's inventory.
+
+    This tool provides complete information about an SDS substance that's already been added to your 
+    organization's locations. Use this to view detailed chemical information, hazard data, location details,
+    and all other properties of a substance.
+
+    REQUIRES: User must be authenticated using the login tool first.
+
+    Arguments:
+        substance_id: The unique identifier of the substance (obtained from customer library search results)
+        session_id: Session ID from authentication
+
+    Returns:
+        Dictionary containing comprehensive substance details:
+        
+        Top-level fields:
+        - id: Substance ID (int)
+        - is_archived: Archive status (bool)
+        - sds_id: SDS document ID (int)
+        - public_view_url: Public viewing URL (str)
+        - safety_summary_url: Safety summary URL (str)
+        - language: Document language code (str, e.g. "no", "en")
+        - product_name: Product/chemical name (str)
+        - supplier_name: Supplier/manufacturer name (str)
+        - product_code: Product code/catalog number (str)
+        - revision_date: SDS revision date (str, YYYY-MM-DD format)
+        - created_date: Record creation date (str, YYYY-MM-DD format)
+        - hazard_sentences: H-codes comma-separated (str, e.g. "H302,H317,H319")
+        - euh_sentences: EUH codes (str)
+        - prevention_sentences: P-codes comma-separated (str)
+        - substance_amount: Amount of substance (nullable)
+        - substance_approval: Approval status (nullable)
+        - nfpa: NFPA rating (nullable)
+        - hmis: HMIS rating (nullable)
+        - info_msg: Information message (nullable)
+        - attachments: List of attached files (list)
+        
+        location: Dict with location information
+        - id: Location ID (int)
+        - name: Location name (str)
+        
+        icons: List of GHS pictogram icons
+        - url: Icon image URL (str)
+        - description: Icon description (str, e.g. "GHS07")
+        - type: Icon type (str, typically "GHS")
+        
+        highest_risks: Dict with risk assessments
+        - health_risk, safety_risk, environment_risk: Base risk levels (nullable)
+        - health_risk_incl_ppe, safety_risk_incl_ppe, environment_risk_incl_ppe: Risk levels including PPE (nullable)
+        
+        highest_storage_risks: Dict with storage risk assessments
+        - storage_safety_risk, storage_environment_risk: Storage risk levels (nullable)
+        
+        sds_info: Comprehensive SDS document information dict
+        - uuid: SDS document UUID (str)
+        - cas_no: CAS number (str)
+        - ec_no: EC number (nullable str)
+        - chemical_formula: Chemical formula (str)
+        - version: SDS version (str)
+        - health_risk, safety_risk, environment_risk: Numeric risk ratings (int)
+        - signal_word: GHS signal word (str, e.g. "Fare", "Danger")
+        - hazard_codes: List of detailed H-codes with descriptions
+        - precautionary_codes: List of detailed P-codes with descriptions
+        - sds_chemical: List of chemical components with CAS numbers and concentrations
+        - regulations: List of regulatory listings (Prop 65, ECHA, SIN List, etc.)
+        - ghs_pictogram_code: GHS codes comma-separated (str)
+        - reach_reg_no: REACH registration number (str)
+        - emergency_telephone_number: Emergency contact (str)
+        - Many other technical and regulatory fields...
+        
+        sds_other_info: Detailed SDS sections breakdown by section numbers (2-16)
+        - Keys are section numbers as strings ("2", "3", "4", etc.)
+        - Values are lists of section content with tags, values, and literals
+        - Contains parsed content from all 16 sections of the SDS document
+        - Includes composition, first aid, fire fighting, handling, physical properties, toxicology, etc.
+
+    Example Usage:
+        # First search your customer library
+        results = search_customer_library("acetone", session_id)
+        substance_id = results["results"][0]["id"]  # Get substance ID from search
+        
+        # Then get detailed information
+        details = retrieve_substance_detail(substance_id, session_id)
+
+    Related Tools:
+        - search_customer_library: Find substances to get their IDs
+        - move_sds_to_location: Move substances between locations
+        - copy_sds_substance: Copy substances to additional locations
+    """
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "No active session found",
+            "instruction": "Please login first using the login tool with your access token"
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    endpoint = f"{BACKEND_URL}/substance/{substance_id}/"
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            return {
+                "status": "success",
+                "substance_details": data,
+                "message": f"Successfully retrieved details for substance {substance_id}"
+            }
+        else:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            return {
+                    "status": "error",
+                    "error_code": data.get("error_code", "Unknown error"),
+                    "error_message": data.get("error_message", "Unknown error"),
+                    "instruction": (
+                        f"Something went wrong. {data.get('error_message', 'Unknown error')}"
+                    )
+                }
+
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
+
+
+@mcp.tool()
+async def get_sdss_with_ingredients(session_id: str, query: str = "", page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+    """
+    Get a paginated list of SDSs (Safety Data Sheets) that contain ingredients 
+    on the restricted list.
+
+    ARGUMENTS:
+        session_id (str): Session ID obtained after authentication.
+        query (str, optional): Search term to filter SDSs. 
+            - If empty (""), returns all SDSs with restricted ingredients.
+            - If provided, returns only matching SDSs with restricted ingredients.
+        page (int, optional): Page number of results to fetch. Defaults to 1.
+        page_size (int, optional): Number of SDSs per page. Defaults to 10.
+
+    RETURN:
+        dict: 
+            - "results": List of SDSs with restricted ingredients
+            - "page": Current page number
+            - "page_size": Number of items per page
+            - "has_more": Boolean flag indicating if more results are available
+
+    NOTES FOR USERS:
+        - Leave `query` empty to see all SDSs with restricted ingredients.
+        - Provide a `query` to search only within restricted SDSs.
+        - Use `page` and `page_size` to control pagination.
+        - If `has_more` is True, you can load additional results by increasing `page`.
+    """
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "No active session found",
+            "instruction": "Please login first using the login tool with your access token"
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    endpoint = f"{BACKEND_URL}/substance/?hazardous=true&search={query}&page={page}&page_size={page_size}"
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+
+            return {
+                    "status": "error",
+                    "error_code": data.get("error_code", "Unknown error"),
+                    "error_message": data.get("error_message", "Unknown error"),
+                    "instruction": (
+                        f"Something went wrong. {data.get('error_message', 'Unknown error')}"
+                    )
+                }
+
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
