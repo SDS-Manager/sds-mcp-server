@@ -133,6 +133,7 @@ async def search_global_database(
     - Do not perform broader search. If no results, only show suggestion for user to choose.
     - Display in a table for the response results with columns: "ID", "Product Name", "Product Code", "Manufacturer Name", "Revision Date", "Language", "Regulation Area", "Public Link", "Discovery Link".
     - Auto convert to language/region code if user input language/region name (e.g., "English" -> "en", "Europe" -> "EU", etc.).
+    - Do not use ID as search keyword.
     """
     try:
         search_param = f"?search={keyword}&page={page}&page_size={page_size}"
@@ -162,18 +163,18 @@ async def search_global_database(
                 "page_size": page_size
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to search SDS with status {response.status_code}",
-                "instruction": "Failed to search SDS. Please try again."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to search SDS with status {response.status_code}",
+                    "instruction": "Failed to search SDS. Please try again."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error", 
@@ -191,6 +192,7 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
 
     IMPORTANT GUIDELINES:
     - If user ask to search without mentioning internally or globally, do search_global_database tool and search_customer_library tool (if authenticated).
+    - Do not use ID as search keyword.
 
     Returns: List of substance information
     """
@@ -234,18 +236,18 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to search SDS with status {response.status_code}",
-                "instruction": "Failed to search SDS. Please try again."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to search SDS with status {response.status_code}",
+                    "instruction": "Failed to search SDS. Please try again."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -309,18 +311,18 @@ async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) ->
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to add SDS to location with status {response.status_code}",
-                "instruction": "Failed to add SDS to location. Please verify the SDS and location."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to add SDS to location with status {response.status_code}",
+                    "instruction": "Failed to add SDS to location. Please verify the SDS and location."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -384,18 +386,18 @@ async def move_sds_to_location(session_id: str, substance_id: str, location_id: 
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to add SDS to move SDS with status {response.status_code}",
-                "instruction": "Failed to move SDS to location. Please verify the SDS and location."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to add SDS to move SDS with status {response.status_code}",
+                    "instruction": "Failed to move SDS to location. Please verify the SDS and location."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -407,7 +409,7 @@ async def move_sds_to_location(session_id: str, substance_id: str, location_id: 
 @mcp.tool()
 async def copy_sds_substance(session_id: str, substance_id: str, location_id: str) -> Dict[str, Any]:
     """
-    Copy a substance (SDS assigned to a location) and add to another location/department.
+    Add the selected substance (SDS assigned to a location) to the target location/department with similar information.
 
     Requires: User must be authenticated via the login tool first.
 
@@ -459,18 +461,18 @@ async def copy_sds_substance(session_id: str, substance_id: str, location_id: st
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to copy SDS to location with status {response.status_code}",
-                "instruction": "Failed to copy SDS to location. Please verify the SDS and location."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to copy SDS to location with status {response.status_code}",
+                    "instruction": "Failed to copy SDS to location. Please verify the SDS and location."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -531,18 +533,18 @@ async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str,
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to archive substance with status {response.status_code}",
-                "instruction": "Failed to archive substance. Please verify the Substance."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to archive substance with status {response.status_code}",
+                    "instruction": "Failed to archive substance. Please verify the Substance."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -596,18 +598,18 @@ async def get_location(session_id: str) -> List[Dict[str, Any]]:
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to get locations with status {response.status_code}",
-                "instruction": "Failed to get locations. Please try again."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to get locations with status {response.status_code}",
+                    "instruction": "Failed to get locations. Please try again."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -670,18 +672,18 @@ async def add_location(session_id: str, name: str, parent_department_id: Optiona
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to add location with status {response.status_code}",
-                "instruction": "Failed to add location. Please verify location information."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to add location with status {response.status_code}",
+                    "instruction": "Failed to add location. Please verify location information."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -701,6 +703,7 @@ async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[
     - If not found any information of the substance, ask user to provide SDS name.
     - When user input SDS name, call search_customer_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substance found.
+    - If seeing error message, display the error message to user.
 
     Returns: Detail information of the substance
     """
@@ -735,18 +738,18 @@ async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[
                 "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
-            error_msg = response.json().get("error_message", None)
-            if error_msg and len(error_msg) > 0:
+            try:
+                error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg[0],
+                    "error": error_msg,
                 }
-            
-            return {
-                "status": "error",
-                "error": f"Failed to get substance with status {response.status_code}",
-                "instruction": "Failed to get substance. Please verify the substance."
-            }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to get substance with status {response.status_code}",
+                    "instruction": "Failed to get substance. Please verify the substance."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -756,31 +759,15 @@ async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[
 
 
 @mcp.tool()
-async def get_sdss_with_ingredients(session_id: str, query: str = "", page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+async def get_sdss_with_ingredients(session_id: str, keyword: str = "", page: int = 1, page_size: int = 10) -> Dict[str, Any]:
     """
-    Get a paginated list of SDSs (Safety Data Sheets) that contain ingredients 
-    on the restricted list.
+    Get or Search hazardous SDSs with detail information on ingredients/components that restricted on regulation list.
 
-    ARGUMENTS:
-        session_id (str): Session ID obtained after authentication.
-        query (str, optional): Search term to filter SDSs. 
-            - If empty (""), returns all SDSs with restricted ingredients.
-            - If provided, returns only matching SDSs with restricted ingredients.
-        page (int, optional): Page number of results to fetch. Defaults to 1.
-        page_size (int, optional): Number of SDSs per page. Defaults to 10.
+    REQUIRES: User must be authenticated using the login tool first.
 
-    RETURN:
-        dict: 
-            - "results": List of SDSs with restricted ingredients
-            - "page": Current page number
-            - "page_size": Number of items per page
-            - "has_more": Boolean flag indicating if more results are available
-
-    NOTES FOR USERS:
-        - Leave `query` empty to see all SDSs with restricted ingredients.
-        - Provide a `query` to search only within restricted SDSs.
-        - Use `page` and `page_size` to control pagination.
-        - If `has_more` is True, you can load additional results by increasing `page`.
+    IMPORTANT GUIDELINES:
+    - If user not mentioning keyword, call get_sdss_with_ingredients tool with keyword as empty string.
+    - When displaying response, show more detail on ingredients/components.
     """
 
     if not session_id:
@@ -798,28 +785,58 @@ async def get_sdss_with_ingredients(session_id: str, query: str = "", page: int 
             "instruction": "Session expired. Please login again using the login tool."
         }
 
-    endpoint = f"{BACKEND_URL}/substance/?hazardous=true&search={query}&page={page}&page_size={page_size}"
+    endpoint = f"{BACKEND_URL}/substance/?hazardous=true&search={keyword}&page={page}&page_size={page_size}"
     headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
 
     try:
         response = requests.get(endpoint, headers=headers, timeout=30)
         if response.status_code == 200:
-            return response.json()
-        else:
-            try:
-                data = response.json()
-            except ValueError:
-                data = {}
+            data = response.json()
+            substance_list = []
+            for substance in data.get("results", []):
+                substance_info = substance.get("sds_info")
+                substance_list.append({
+                    "product_name": substance.get("product_name"),
+                    "product_code": substance.get("product_code"),
+                    "supplier_name": substance.get("supplier_name"),
+                    "revision_date": substance.get("revision_date"),
+                    "location": substance.get("location"),
+                    "components": (
+                        substance_info.get("sds_chemical", []) 
+                        if substance_info else []
+                    ),
+                    "matched_regulations": (
+                        substance_info.get("regulations", []) 
+                        if substance_info else []
+                    )
+                })
 
             return {
+                "status": "success",
+                "data": substance_list,
+                "page": page,
+                "page_size": page_size,
+            }
+        elif response.status_code == 401:
+            redis_client.delete(f"sds_mcp:{session_id}")
+            return {
+                "status": "error",
+                "error": "Authentication expired",
+                "instruction": "Your session has expired. Please login again with your access token."
+            }
+        else:
+            try:
+                error_msg = response.json().get("error_message", None)
+                return {
                     "status": "error",
-                    "error_code": data.get("error_code", "Unknown error"),
-                    "error_message": data.get("error_message", "Unknown error"),
-                    "instruction": (
-                        f"Something went wrong. {data.get('error_message', 'Unknown error')}"
-                    )
+                    "error": error_msg,
                 }
-
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to get SDSs with status {response.status_code}",
+                    "instruction": "Failed to get SDSs. Please try again."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
