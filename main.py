@@ -6,7 +6,9 @@ import requests
 from search import mcp as search_mcp
 from config import PORT, BACKEND_URL, SDS_HEADER_NAME
 from cache import redis_client
-import json
+import pandas as pd
+import tempfile
+
 # Create templates directory
 templates = Jinja2Templates(directory="templates")
 
@@ -113,6 +115,62 @@ async def upload_file(
         return {"status": "error", "message": f"Upload error: {str(e)}"}
 
 
+@app.get("/uploadProductList", response_class=HTMLResponse)
+async def upload_product_list_form(request: Request, session_id: str, request_id: str):
+    """
+    Display file upload form for product list
+    """
+    return templates.TemplateResponse("upload_product_list.html", {
+        "request": request,
+        "session_id": session_id,
+        "request_id": request_id
+    })
+
+
+@app.post("/uploadProductList")
+async def upload_product_list(
+    session_id: str = Form(...),
+    request_id: str = Form(...),
+    file: UploadFile = File(...)
+):
+    """
+    Handle product list upload
+    """
+    # Create a temporary file
+    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+        # Write uploaded content to temp file
+        content = await file.read()
+        tmp_file.write(content)
+        tmp_file_path = tmp_file.name
+    
+    try:
+        # Read from the temp file
+        df = pd.read_excel(tmp_file_path)
+        data_list = df.to_dict('records')
+        
+        # Set processing status
+        key = f"upload_product_list:{session_id}:{request_id}"
+        redis_client.set(key, {
+            "status": "extracted",
+            "extracted_data": data_list,
+            "filename": file.filename,
+            "temp_path": tmp_file_path,
+        })
+        
+        return {
+            "status": "success",
+            "message": "Product list upload processing started",
+            "filename": file.filename,
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Error processing product list: {str(e)}"
+        }
+
+
+    
+    
     
 if __name__ == "__main__":
     import uvicorn

@@ -933,3 +933,71 @@ async def check_upload_status(session_id: str, request_id: str) -> dict:
             "error": f"Connection error: {str(e)}",
             "instruction": "Failed to connect to service. Please try again."
         }
+
+
+
+@mcp.tool()
+async def upload_product_list(session_id: str) -> Dict[str, Any]:
+    """
+    When user upload the product list, call this tool to upload the product list to the backend server.
+    
+    REQUIRED: User must be authenticated using the login tool first.
+    IMPORTANT GUIDELINES:
+    """
+
+
+    request_id = str(uuid.uuid4())
+
+    key = f"upload_product_list:{session_id}:{request_id}"
+    redis_client.set(key, "pending")
+
+    upload_url = f"{DOMAIN}/uploadProductList?session_id={session_id}&request_id={request_id}"
+
+    return {
+        "status": "success",
+        "request_id": request_id,
+        "upload_url": upload_url,
+        "instruction": [
+            "1. Click or copy the upload_url link to access the upload form",
+            "2. Select your excel file using the file input and click 'Upload' to upload",
+            "3. After the file is uploaded, call get_upload_product_list_status tool with request_id to check the status of the upload process"
+        ]
+    }
+
+
+@mcp.tool()
+async def get_upload_product_list_status(session_id: str, request_id: str) -> dict:
+    """
+    Get the status of the upload product list process.
+
+    REQUIRED: User must be authenticated using the login tool first.
+    """
+    
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    key = f"upload_product_list:{session_id}:{request_id}"
+    status = redis_client.get(key)
+
+    if not status:
+        return {
+            "status": "error",
+            "error": "Status not found",
+            "instruction": "Please check the request ID and try again."
+        }
+
+
+@mcp.tool()
+async def map(session_id: str, request_id: str) -> dict:
+    """
+    Get the product list from the specified request ID.
+
+    REQUIRED: User must be authenticated using the login tool first.
+    """
+    
+    
