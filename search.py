@@ -1,7 +1,7 @@
 from mcp.server.fastmcp import FastMCP
 from cache import redis_client
 from typing import Dict, Any, List, Optional
-from config import BACKEND_URL, SDS_HEADER_NAME
+from config import BACKEND_URL, SDS_HEADER_NAME, PORT, DOMAIN
 import logging
 import requests
 import uuid
@@ -883,116 +883,89 @@ async def get_sdss_with_ingredients(session_id: str, query: str = "", page: int 
         }
 
 @mcp.tool()
-async def upload_sds_file_to_location(
-    session_id: str,
-    department_id: str,
-    pdf_content: str,
-    file_name: str,
-) -> Dict[str, Any]:
+async def get_upload_link(session_id: str, department_id: str) -> dict:
     """
-    Upload the SDS file to the specified location using the base64 content:
+    Generate an upload link for users to upload SDS files to a specific location.
+    
     ARGUMENTS:
         session_id (str): Session ID obtained after authentication.
-        department_id (str): ID of the department to upload the SDS file to. need to get from get_location tool to get correct department id.
-        pdf_content (str): Content of the SDS file to upload.
-        file_name (str): Name of the SDS file to upload.
-
-    The user must provide the SDS file content in pdf format.
-    The use must provide the department_id of the location to upload the SDS file to.
-    If the user provide location name, use get_location tool to get the department_id.
-    If the user provide location id, use it directly.
-    If the user provide both, use the location id.
-    If the user provide neither, ask user to provide the location name or id.
+        department_id (str): ID of the department to upload the SDS file to.
+        
+    RETURNS:
+        dict:
+            - "status": "success" or "error"
+            - "upload_url": URL where user can upload files
+            - "message": Instructions for the user
+            - "request_id": Request ID for checking upload status
     """
-
-    if not session_id:
-        return {
-            "status": "error",
-            "error": "No active session found",
-            "instruction": "Please login first using the login tool with your access token",
-        }
-
+    # Validate session
     info = redis_client.get(f"sds_mcp:{session_id}")
     if not info:
         return {
             "status": "error",
             "error": "Access token not found in session",
-            "instruction": "Session expired. Please login again using the login tool.",
+            "instruction": "Session expired. Please login again using the login tool."
         }
 
-    access_token = info.get("access_token")
-    if not access_token:
+    request_id = str(uuid.uuid4())
+
+    # Generate upload URL
+    upload_url = f"{DOMAIN}/upload?session_id={session_id}&department_id={department_id}&request_id={request_id}"
+    
+    return {
+        "status": "success",
+        "upload_url": upload_url,
+        "request_id": request_id,
+        "message": f"Upload link generated for department {department_id}",
+        "instructions": [
+            "1. Click or copy the upload_url to access the upload form",
+            "2. Select your PDF file using the file input",
+            "3. Click 'Upload SDS File' to upload",
+            "4. The file will be automatically processed and added to the specified location",
+            "5. After the file is uploaded, you can check the status of the upload process by using the check_upload_status tool"
+        ]
+    }
+
+
+@mcp.tool()
+async def check_upload_status(session_id: str, request_id: str) -> dict:
+    """
+    Check the status of the upload process.
+    """
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
         return {
             "status": "error",
-            "error": "Missing access token in session",
-            "instruction": "Please login again using the login tool.",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
         }
 
-
-    try:
-        pdf_bytes = base64.b64decode(pdf_content, validate=True)
-    except Exception:
+    upload_request_id = redis_client.get(f"sds_mcp:{session_id}:{request_id}")
+    if not upload_request_id:
         return {
             "status": "error",
-            "error": "Invalid base64 PDF content",
-            "instruction": "Ensure `pdf_content` is base64-encoded PDF data.",
+            "error": "Request ID not found in session",
+            "instruction": "Please check the request ID and try again."
         }
 
-    if not file_name or "." not in file_name:
-        file_name = "sds.pdf"
-
-    # --- Prepare request ---
-    headers = {SDS_HEADER_NAME: access_token}
-
-    # Save to temp file
-    temp_file = tempfile.NamedTemporaryFile(delete=False)
-    temp_file_path = temp_file.name
-    temp_file.close()
+    endpoint = f"{BACKEND_URL}/binder/getExtractionStatus/?id={upload_request_id}"
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
 
     try:
-        with open(temp_file_path, "wb") as f:
-            f.write(pdf_bytes)
-
-        with open(temp_file_path, "rb") as f:
-            files = {
-                # (filename, fileobj, content_type)
-                "imported_file": (file_name, f, "application/pdf"),
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            return data
+        else:
+            return {
+                "status": "error", 
+                "error": f"Request failed with status {response.status_code}",
+                "instruction": "Failed to get upload status. Please try again."
             }
-            response = requests.post(
-                f"{BACKEND_URL}/location/{department_id}/uploadSDS/",
-                headers=headers,
-                files=files,
-                timeout=30,
-            )
+
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
             "error": f"Connection error: {str(e)}",
-            "instruction": "Failed to connect to service. Please try again.",
+            "instruction": "Failed to connect to service. Please try again."
         }
-    finally:
-        # Clean up temp file
-        if os.path.exists(temp_file_path):
-            os.unlink(temp_file_path)
-
-    # --- Handle response ---
-    if response.status_code == 200:
-        res = response.json()
-        
-
-        return {
-            "status": "success",
-            "file_info": res.get("file_info", ""),
-            "request_id": res.get("request_id", ""),
-            "step": res.get("step", ""),
-            "instruction": "Successfully uploaded the SDS file. Processing will begin shortly.",
-        }
-
-    err = response.json()
-
-    return {
-        "status": "error",
-        "error_code": err.get("error_code", f"HTTP_{response.status_code}"),
-        "error_message": err.get("error_message", "Unknown error"),
-        "instruction": f"Upload failed: {err.get('error_message', 'Unknown error')}",
-    }

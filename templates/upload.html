@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SDS Manager - Upload File</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            background: white;
+            padding: 30px;
+            border-radius: 10px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            color: #333;
+        }
+        .form-group {
+            margin-bottom: 20px;
+        }
+        label {
+            display: block;
+            margin-bottom: 5px;
+            font-weight: bold;
+            color: #555;
+        }
+        input[type="file"] {
+            width: 100%;
+            padding: 10px;
+            border: 2px dashed #ccc;
+            border-radius: 5px;
+            background: #fafafa;
+        }
+        input[type="file"]:hover {
+            border-color: #007bff;
+            background: #f0f8ff;
+        }
+        .upload-btn {
+            background-color: #007bff;
+            color: white;
+            padding: 12px 30px;
+            border: none;
+            border-radius: 5px;
+            cursor: pointer;
+            font-size: 16px;
+            width: 100%;
+        }
+        .upload-btn:hover {
+            background-color: #0056b3;
+        }
+        .upload-btn:disabled {
+            background-color: #ccc;
+            cursor: not-allowed;
+        }
+        .info-box {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            border-left: 4px solid #007bff;
+        }
+        .result {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            display: none;
+        }
+        .result.success {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .result.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        .progress {
+            width: 100%;
+            height: 20px;
+            background: #f0f0f0;
+            border-radius: 10px;
+            overflow: hidden;
+            margin-top: 10px;
+            display: none;
+        }
+        .progress-bar {
+            height: 100%;
+            background: #007bff;
+            width: 0%;
+            transition: width 0.3s ease;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🔒 SDS Manager - Upload File</h1>
+            <p>Welcome, {{ user_name }}!</p>
+        </div>
+
+        <div class="info-box">
+            <strong>📋 Upload Information:</strong><br>
+            • Session ID: {{ session_id[:8] }}...<br>
+            • Department ID: {{ department_id }}<br>
+            • Accepted format: PDF files only
+        </div>
+
+        <form id="uploadForm" enctype="multipart/form-data">
+            <input type="hidden" name="session_id" value="{{ session_id }}">
+            <input type="hidden" name="department_id" value="{{ department_id }}">
+            <input type="hidden" name="request_id" value="{{ request_id }}">
+            
+            <div class="form-group">
+                <label for="file">📄 Select SDS PDF File:</label>
+                <input type="file" id="file" name="file" accept=".pdf" required>
+            </div>
+
+            <button type="submit" class="upload-btn" id="uploadBtn">
+                📤 Upload SDS File
+            </button>
+
+            <div class="progress" id="progress">
+                <div class="progress-bar" id="progressBar"></div>
+            </div>
+        </form>
+
+        <div class="result" id="result"></div>
+    </div>
+
+    <script>
+        document.getElementById('uploadForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            
+            const formData = new FormData(this);
+            const uploadBtn = document.getElementById('uploadBtn');
+            const result = document.getElementById('result');
+            const progress = document.getElementById('progress');
+            const progressBar = document.getElementById('progressBar');
+            
+            // Reset UI
+            result.style.display = 'none';
+            progress.style.display = 'block';
+            uploadBtn.disabled = true;
+            uploadBtn.textContent = '⏳ Uploading...';
+            
+            // Simulate progress
+            let progressValue = 0;
+            const progressInterval = setInterval(() => {
+                progressValue += Math.random() * 30;
+                if (progressValue > 90) progressValue = 90;
+                progressBar.style.width = progressValue + '%';
+            }, 200);
+            
+            try {
+                const response = await fetch('/upload', {
+                    method: 'POST',
+                    body: formData
+                });
+                
+                const data = await response.json();
+                
+                // Complete progress
+                clearInterval(progressInterval);
+                progressBar.style.width = '100%';
+                
+                setTimeout(() => {
+                    progress.style.display = 'none';
+                    result.style.display = 'block';
+                    
+                    if (data.status === 'success') {
+                        result.className = 'result success';
+                        result.innerHTML = `
+                            <strong>✅ Upload Successful!</strong><br>
+                            ${data.message}<br>
+                            <small>You can close this window now.</small>
+                        `;
+                    } else {
+                        result.className = 'result error';
+                        result.innerHTML = `
+                            <strong>❌ Upload Failed!</strong><br>
+                            ${data.message}
+                        `;
+                    }
+                    
+                    uploadBtn.disabled = false;
+                    uploadBtn.textContent = '📤 Upload Another File';
+                }, 500);
+                
+            } catch (error) {
+                clearInterval(progressInterval);
+                progress.style.display = 'none';
+                result.style.display = 'block';
+                result.className = 'result error';
+                result.innerHTML = `
+                    <strong>❌ Upload Error!</strong><br>
+                    ${error.message}
+                `;
+                
+                uploadBtn.disabled = false;
+                uploadBtn.textContent = '📤 Upload SDS File';
+            }
+        });
+
+        // File input validation
+        document.getElementById('file').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (file && !file.name.toLowerCase().endsWith('.pdf')) {
+                alert('Please select a PDF file only.');
+                this.value = '';
+            }
+        });
+    </script>
+</body>
+</html>
