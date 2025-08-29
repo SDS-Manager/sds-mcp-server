@@ -92,12 +92,12 @@ async def upload_file(
         response = requests.post(
             f"{BACKEND_URL}/location/{department_id}/uploadSDS/",
             headers=headers,
+            data={"id": request_id},
             files={"imported_file": (file.filename, file_content, "application/pdf")}
         )
-        
+
         if response.status_code == 200:
             result = response.json()
-            redis_client.set(f"sds_mcp:{session_id}:{request_id}", result.get("request_id"))
             return {
                 "status": "success", 
                 "message": f"Successfully uploaded {file.filename} to location {department_id}",
@@ -109,13 +109,11 @@ async def upload_file(
                 "message": f"Upload failed with status {response.status_code}",
                 "details": response.text
             }
-            
     except Exception as e:
         return {"status": "error", "message": f"Upload error: {str(e)}"}
 
 
     
-
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
