@@ -1,4 +1,5 @@
 import contextlib
+import os
 from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
@@ -136,8 +137,12 @@ async def upload_product_list(
     """
     Handle product list upload
     """
-    # Create a temporary file
-    with tempfile.NamedTemporaryFile(delete=False, suffix='.xlsx') as tmp_file:
+    file_name = file.filename
+    tmpdirname = f"tmp/{request_id}"
+    if not os.path.exists(tmpdirname):
+        os.makedirs(tmpdirname)
+
+    with tempfile.NamedTemporaryFile(delete=False, dir=tmpdirname, suffix='.xlsx') as tmp_file:
         # Write uploaded content to temp file
         content = await file.read()
         tmp_file.write(content)
@@ -147,15 +152,22 @@ async def upload_product_list(
         # Read from the temp file
         df = pd.read_excel(tmp_file_path)
         data_list = df.to_dict('records')
+        total_data = len(data_list)
+        columns_list = df.columns.tolist()
+        extracted_columns = []
+        for item in columns_list:
+            extracted_columns.append(item.lower())
         
         # Set processing status
         key = f"upload_product_list:{session_id}:{request_id}"
-        redis_client.set(key, {
+        record = {
             "status": "extracted",
-            "extracted_data": data_list,
-            "filename": file.filename,
-            "temp_path": tmp_file_path,
-        })
+            "extracted_columns": extracted_columns,
+            "total_row": total_data,
+            "file_name": file_name,
+            "file_path": tmp_file_path,
+        }
+        redis_client.set(key, record)
         
         return {
             "status": "success",
@@ -169,9 +181,6 @@ async def upload_product_list(
         }
 
 
-    
-    
-    
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=PORT)
