@@ -220,7 +220,7 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
         response = requests.get(
             f"{BACKEND_URL}/substance/?search={keyword}&page={page}&page_size={page_size}",
             headers=headers,
-            timeout=10
+            timeout=30,
         )
 
         if response.status_code == 200:
@@ -1183,7 +1183,124 @@ async def check_upload_product_list_excel_data_status(session_id: str, wish_list
     - If progress finished for all substance (Ex. N/N), show information.
     - If progress is not finished, show information for current progres and call check_upload_product_list_excel_data_status tool with wish_list_id again.
     """
+    
+    
+@mcp.tool()
+async def get_sds_request(session_id: str, search: str = "", page: int = 1, page_size: int = 10):
+    """
+    Retrieve pending SDS (Safety Data Sheet) requests.
 
+    REQUIREMENTS:
+        - User must be authenticated with the login tool before calling this function.
+        - `session_id` (str): Active session identifier.
+
+    PARAMETERS:
+        - `search` (str, optional): Keyword to filter SDS requests. Defaults to "" (no filter).
+        - `page` (int, optional): Page number for pagination. Defaults to 1.
+        - `page_size` (int, optional): Number of items per page. Defaults to 10.
+
+    BEHAVIOR:
+        - If no `search` term is provided:
+            • Ask the user if they want to supply one.
+            • If still none, call with `search=""` to fetch all requests.
+        - If a `search` term is provided, pass it directly to filter the results.
+        - After returning results, ask the user if they would like to see more (next page).
+
+    RETURNS:
+        - JSON response with the list of pending SDS requests.
+        - Error response if session is invalid, expired, or service is unavailable.
+    """
+
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "No active session found",
+            "instruction": "Please login first using the login tool with your access token"
+        }
+        
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+    
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+    endpoint = f"{BACKEND_URL}/substance/sdsRequests?page={page}&page_size={page_size}"
+
+    if search:
+        endpoint += f"&search={search}"
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return response.json()
+        else:
+            try:
+                error_msg = response.json().get("error_message", None)
+                return {
+                    "status": "error",
+                    "error": error_msg,
+                }
+            except:  # noqa: E722
+                return {
+                    "status": "error",
+                    "error": f"Failed to get SDSs with status {response.status_code}",
+                    "instruction": "Failed to get SDSs. Please try again."
+                }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
+
+@mcp.tool()
+async def edit_sds_data(
+    session_id: str,
+    substance_id: str,
+    sds_pdf_product_name: Optional[str] = None,
+    chemical_name_synonyms: Optional[str] = None,
+    external_system_id: Optional[str] = None,
+) -> dict:
+    """
+    Edit SDS (Safety Data Sheet) data for a given substance.
+
+    REQUIREMENTS:
+        - User must be authenticated with the login tool before calling this function.
+        - `substance_id` should normally be obtained via the `search_customer_library` tool.
+        - If the user provides a `substance_id` directly, validate it first using
+          the `retrieve_substance_detail` tool before proceeding.
+
+    PARAMETERS:
+        - `session_id` (str): Active session identifier.
+        - `substance_id` (str): Unique ID of the substance (validated via `search_customer_library`
+          or `retrieve_substance_detail`).
+        - `sds_pdf_product_name` (str, optional): Product name shown in the SDS.
+        - `chemical_name_synonyms` (str, optional): Synonyms of the chemical.
+        - `external_system_id` (str, optional): External reference identifier.
+
+    UPDATE RULES:
+        - To **add or change** a field, provide the new value.
+        - To **remove** a field, set its value to an empty string "".
+            • Example: `sds_pdf_product_name=""` will remove the product name.
+
+    SUPPORTED ACTIONS:
+        - Add/change/remove the product name.
+        - Add/change/remove synonyms.
+        - Add/change/remove an external system ID.
+    """
+
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "No active session found",
+            "instruction": "Please login first using the login tool with your access token"
+        }
+        
     info = redis_client.get(f"sds_mcp:{session_id}")
     if not info:
         return {
@@ -1193,31 +1310,76 @@ async def check_upload_product_list_excel_data_status(session_id: str, wish_list
         }
 
     headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
-    endpoint = f"{BACKEND_URL}/binder/getImportProductListStatus/?id={wish_list_id}"
+    endpoint = f"{BACKEND_URL}/substance/{substance_id}/updateSDS/"
 
+    is_valid = (
+        sds_pdf_product_name is not None or
+        chemical_name_synonyms is not None or
+        external_system_id is not None
+    )
+    if not is_valid:
+        return {
+            "status": "error",
+            "error": "At least one field must be provided",
+            "instruction": "Please provide at least one field to update."
+        }
+    data = {}
     try:
-        response = requests.get(endpoint, headers=headers, timeout=30)
+
+        if sds_pdf_product_name is not None:
+            data["sds_pdf_product_name"] = sds_pdf_product_name
+        if chemical_name_synonyms is not None:
+            data["chemical_name_synonyms"] = chemical_name_synonyms
+        if external_system_id is not None:
+            data["external_system_id"] = external_system_id
+
+        response = requests.patch(
+            endpoint,
+            headers=headers,
+            timeout=30,
+            json=data
+        )
         if response.status_code == 200:
-            data = response.json()
-            progress = data.get("progress")
             return {
-                "status": "success", 
-                "data": data,
-                "progress": progress,
-                "instruction": [
-                    "Show information for current progress in data",
-                    "If progress is not finished, call check_upload_product_list_excel_data_status tool with wish_list_id again."
-                ]
+                "status": "success",
+                "message": "SDS updated successfully",
+                "instruction": (
+                    "Immediately call tool `retrieve_substance_detail` with the same "
+                    f"`session_id={session_id}` and `substance_id={substance_id}` to verify the update. "
+                    "Compare the returned record against the submitted payload to confirm: "
+                    "• `sds_pdf_product_name` matches the new value (and is removed if empty string was sent). "
+                    "• `chemical_name_synonyms` matches the new value (and is removed if empty string was sent). "
+                    "• `external_system_id` matches the new value (and is removed if empty string was sent). "
+                    "If the values match, tell the user: 'Update verified in customer library.' "
+                    "If any mismatch is found, report which fields differ and suggest retrying the edit."
+                ),
+                "next_action": {
+                    "tool": "retrieve_substance_detail",
+                    "args": {
+                        "session_id": session_id,
+                        "substance_id": substance_id,
+                    },
+                    "verify_fields": [
+                        "sds_pdf_product_name",
+                        "chemical_name_synonyms",
+                        "external_system_id",
+                    ],
+                    "on_success_message": "Update verified in customer library.",
+                    "on_mismatch_message": "Update applied but could not be fully verified. The following fields differ:",
+                },
             }
         else:
             return {
-                "status": "error", 
-                "error": f"Request failed with status {response.status_code}",
-                "instruction": "Failed to get upload status. Please try again."
+                "status": "error",
+                "error": f"Failed to update SDS with status {response.status_code}",
+                "instruction": "Failed to update SDS. Please try again."
             }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
             "error": f"Connection error: {str(e)}",
-            "instruction": "Failed to connect to service. Please try again."
+            "instruction": "Failed to connect to update service. Please try again."
         }
+
+    
+    
