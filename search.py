@@ -5,12 +5,16 @@ from config import BACKEND_URL, SDS_HEADER_NAME, PORT, DOMAIN
 import logging
 import requests
 import uuid
+import pandas as pd
+import json
+import os
+
 logger = logging.getLogger(__name__)
 
 # Initialize MCP server with proper description
 mcp = FastMCP(
-    name="SDS Manager Search",
-    instructions="SDS Manager Search API - Authentication required. Please login with your access token first using the login tool.",
+    name="SDS Manager",
+    instructions="SDS Manager API.",
     stateless_http=True,
 )
 
@@ -113,7 +117,6 @@ async def check_auth_status(session_id: str) -> Dict[str, Any]:
             "status": "not_authenticated",
             "authenticated": False,
             "instruction": "Please use the login tool with your access token to authenticate.",
-            "example": "login(access_token='your_jwt_token_here')"
         }
 
 
@@ -167,7 +170,7 @@ async def search_global_database(
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -240,7 +243,7 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -315,7 +318,7 @@ async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) ->
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -390,7 +393,7 @@ async def move_sds_to_location(session_id: str, substance_id: str, location_id: 
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -465,7 +468,7 @@ async def copy_sds_substance(session_id: str, substance_id: str, location_id: st
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -537,7 +540,7 @@ async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str,
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -602,7 +605,7 @@ async def get_location(session_id: str) -> List[Dict[str, Any]]:
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -676,7 +679,7 @@ async def add_location(session_id: str, name: str, parent_department_id: Optiona
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -742,7 +745,7 @@ async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -829,7 +832,7 @@ async def get_sdss_with_ingredients(session_id: str, keyword: str = "", page: in
                 error_msg = response.json().get("error_message", None)
                 return {
                     "status": "error",
-                    "error": error_msg,
+                    "error": error_msg if error_msg else response.text,
                 }
             except:
                 return {
@@ -846,7 +849,7 @@ async def get_sdss_with_ingredients(session_id: str, keyword: str = "", page: in
 
 
 @mcp.tool()
-async def upload_sds_file_to_location(session_id: str, department_id: str):
+async def upload_sds_pdf_to_location(session_id: str, department_id: str):
     """
     Upload SDS file to the specified location.
 
@@ -857,7 +860,7 @@ async def upload_sds_file_to_location(session_id: str, department_id: str):
     - When user input location name, call get_location tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
     - Ask user to clarify they have finished uploading the SDS file.
-    - If user confirm they have finished uploading the SDS file, call check_upload_status tool with request_id to check the status of the upload process.
+    - If user confirm they have finished uploading the SDS file, call check_upload_sds_pdf_to_location_status tool with request_id to check the status of the upload process.
     """
     # Validate session
     info = redis_client.get(f"sds_mcp:{session_id}")
@@ -878,22 +881,23 @@ async def upload_sds_file_to_location(session_id: str, department_id: str):
         "instructions": [
             "1. Click or copy the upload_url link to access the upload form",
             "2. Select your PDF file using the file input and click 'Upload SDS File' to upload",
-            "3. After the file is uploaded, call check_upload_status tool with request_id to check the status of the upload process"
+            "3. After the file is uploaded, call check_upload_sds_pdf_to_location_status tool with request_id to check the status of the upload process"
         ]
     }
     
 
 @mcp.tool()
-async def check_upload_status(session_id: str, request_id: str) -> dict:
+async def check_upload_sds_pdf_to_location_status(session_id: str, request_id: str) -> dict:
     """
-    Check and notify the status of the upload SDS file process.
+    Check and notify the status for upload_sds_pdf_to_location tool.
 
     REQUIRED: User must be authenticated using the login tool first.
 
     IMPORTANT GUIDELINES:
+    - This should only be called after upload_sds_pdf_to_location tool.
     - If not found request, ask user to provide request_id or follow the instruction to upload SDS file again.
     - If progress is 100, show information.
-    - If progress is not 100, show information for current progres and call check_upload_status tool with request_id again.
+    - If progress is not 100, show information for current progres and call upload_sds_pdf_to_location tool with request_id again.
     """
 
     info = redis_client.get(f"sds_mcp:{session_id}")
@@ -913,7 +917,7 @@ async def check_upload_status(session_id: str, request_id: str) -> dict:
             data = response.json()
             progress = data.get("progress", 0)
             return {
-                "status": "success" if progress == 100 else "pending", 
+                "status": "success", 
                 "data": data,
                 "progress": progress,
                 "instruction": [
@@ -935,44 +939,18 @@ async def check_upload_status(session_id: str, request_id: str) -> dict:
         }
 
 
-
 @mcp.tool()
-async def upload_product_list(session_id: str) -> Dict[str, Any]:
+async def upload_product_list_excel_file(session_id: str) -> Dict[str, Any]:
     """
-    When user upload the product list, call this tool to upload the product list to the backend server.
-    
+    Upload Product List excel file to the customer's inventory.
+
     REQUIRED: User must be authenticated using the login tool first.
+
     IMPORTANT GUIDELINES:
+    - Display the upload_url for the user to access the upload form and upload the excel file.
+    - Ask user to clarify they have finished uploading the product list file from the upload_url.
+    - If user confirm they have finished uploading the excel file, call validate_upload_product_list_excel_data tool with request_id.
     """
-
-
-    request_id = str(uuid.uuid4())
-
-    key = f"upload_product_list:{session_id}:{request_id}"
-    redis_client.set(key, "pending")
-
-    upload_url = f"{DOMAIN}/uploadProductList?session_id={session_id}&request_id={request_id}"
-
-    return {
-        "status": "success",
-        "request_id": request_id,
-        "upload_url": upload_url,
-        "instruction": [
-            "1. Click or copy the upload_url link to access the upload form",
-            "2. Select your excel file using the file input and click 'Upload' to upload",
-            "3. After the file is uploaded, call get_upload_product_list_status tool with request_id to check the status of the upload process"
-        ]
-    }
-
-
-@mcp.tool()
-async def get_upload_product_list_status(session_id: str, request_id: str) -> dict:
-    """
-    Get the status of the upload product list process.
-
-    REQUIRED: User must be authenticated using the login tool first.
-    """
-    
     info = redis_client.get(f"sds_mcp:{session_id}")
     if not info:
         return {
@@ -981,23 +959,265 @@ async def get_upload_product_list_status(session_id: str, request_id: str) -> di
             "instruction": "Session expired. Please login again using the login tool."
         }
 
-    key = f"upload_product_list:{session_id}:{request_id}"
-    status = redis_client.get(key)
+    request_id = str(uuid.uuid4())
+    upload_url = f"{DOMAIN}/uploadProductList?session_id={session_id}&request_id={request_id}"
 
-    if not status:
+    return {
+        "status": "success",
+        "upload_url": upload_url,
+        "request_id": request_id,
+    }
+
+
+@mcp.tool()
+async def validate_upload_product_list_excel_data(
+    session_id: str, 
+    request_id: str
+) -> Dict[str, Any]:
+    """
+    Validtating for data from upload_product_list_excel_file tool.
+
+    REQUIRED: User must be authenticated using the login tool first.
+
+    IMPORTANT GUIDELINES:
+    - This should only be called after upload_product_list_excel_file tool.
+    - If not found request, ask user to follow the instruction from upload_product_list_excel_file.
+    """
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
         return {
             "status": "error",
-            "error": "Status not found",
-            "instruction": "Please check the request ID and try again."
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    data_key =  redis_client.get(f"upload_product_list:{session_id}:{request_id}")
+    if not data_key:
+        return {
+            "status": "error",
+            "error": "Not found upload session",
+            "instruction": "Ask user to follow the step in upload_product_list tool"
+        }
+
+    file_name = data_key.get("file_name")
+    file_path = data_key.get("file_path")
+    if not file_path or not file_name:
+        return {
+            "status": "error",
+            "error": "Error when accessing file",
+            "instruction": "Ask user to follow the step in upload_product_list_excel_file tool again"
+        }
+
+    total_rows = data_key.get("total_row")
+    if not total_rows:
+        return {
+            "status": "error",
+            "error": "Not found any data from uploaded file",
+            "instruction": "Ask user to verify the uploaded file and follow the step in upload_product_list_excel_file tool again"
+        }
+
+    extracted_columns = data_key.get("extracted_columns")
+    if not extracted_columns:
+        return {
+            "status": "error",
+            "error": "Unable to extract columns from uploaded file",
+            "instruction": "Ask user to verify the uploaded file and follow the step in upload_product_list_excel_file tool again"
+        }
+
+    return {
+        "status": "success",
+        "extracted_columns": extracted_columns,
+        "file_path": file_path,
+        "request_id": request_id,
+        "instruction": [
+            "Auto map columns name in extracted_columns to a dictionary. The dictionary must have keys: product_name, supplier_of_sds. The dictionary can optionally have: location, location_id, product_code, cas_no, vendor_email, amount, amount_unit, link_to_sds, sku, external_system_id. Example: {'product_name': 'PRODUCT NAME', 'supplier_of_sds': 'SUPPLIER OF SDS', 'location': 'LOCATION', 'location_id': 'DEPARTMENT ID', 'product_code': 'PRODUCT CODE', 'cas_no': 'CAS NUMBER', 'vendor_email': 'VENDOR EMAIL', 'amount': 'AMOUNT VALUE', 'amount_unit': 'AMOUNT UNIT', 'link_to_sds': 'EXTERNAL SYSTEM URL', 'sku': 'SKU', 'external_system_id': 'EXTERNAL SYSTEM ID'}. If not found required key or exist column name not able to match, ask user to choose key that match with column name in extracted_columns.",
+            "Ask user to confirm mapped data whether it is correct.",
+            "If user confirmed correct, call and pass the mapped data to process_upload_product_list_excel_data tool",
+        ]
+    }
+
+
+@mcp.tool()
+async def process_upload_product_list_excel_data(
+    session_id: str, 
+    request_id: str,
+    mapped_data: dict, 
+    auto_match_substance: bool,
+) -> Dict[str, Any]:
+    """
+    Processing for data from validate_upload_product_list_excel_data tool.
+
+    REQUIRED: User must be authenticated using the login tool first.
+
+    IMPORTANT GUIDELINES:
+    - This should only be called after validate_upload_product_list_excel_data tool.
+    - If not found request_id or mapped_data, ask user to follow the instruction from upload_product_list_excel_file tool.
+    - Always ask user to clarify if they want to match the substance automatically or not.
+    """
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    data_key =  redis_client.get(f"upload_product_list:{session_id}:{request_id}")
+    if not data_key:
+        return {
+            "status": "error",
+            "error": "Not found upload session",
+            "instruction": "Ask user to follow the step in upload_product_list tool"
+        }
+    
+    file_name = data_key.get("file_name")
+    file_path = data_key.get("file_path")
+    if not file_path or not file_name:
+        return {
+            "status": "error",
+            "error": "Error when accessing file",
+            "instruction": "Ask user to follow the step in upload_product_list_excel_file tool again"
+        }
+
+    if not mapped_data:
+        return {
+            "status": "error",
+            "error": "Not found data",
+            "instruction": "Ask user to follow the step in upload_product_list_excel_file tool again"
+        }
+
+    column_mapping = {}
+    for key, value in mapped_data.items():
+        column_mapping[value] = key
+
+    df = pd.read_excel(file_path)
+    data_list = df.to_dict('records')
+    extracted_data = []
+    for data in data_list:
+        extracted_row = {}
+        for key, value in data.items():
+            if not value or pd.isna(value):
+                continue
+            converted_key = key.lower()
+            if converted_key in column_mapping:
+                extracted_row[column_mapping[converted_key].upper()] = value
+        if extracted_row:
+            extracted_data.append(extracted_row)
+
+    try:
+        converted_data = json.dumps(extracted_data)
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Error extracting data: {str(e)}",
+            "instruction": "Ask user to follow the step in upload_product_list_excel_file tool again"
+        }
+
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+    try:
+        with open(file_path, "rb") as f:
+            response = requests.post(
+                f"{BACKEND_URL}/substance/uploadProductList/",
+                headers=headers,
+                data={
+                    "extracted": converted_data,
+                    "auto_match": str(auto_match_substance).lower(),
+                },
+                files={"file": (file_name, f, "application/pdf")},
+                timeout=10,
+            )
+
+        if response.status_code == 200:
+            os.remove(file_path)
+            response_data = response.json()
+            return {
+                "status": "success",
+                "uploaded_file_name": response_data.get("file_name"),
+                "uploaded_file_path": response_data.get("file_path"),
+                "wish_list_id": response_data.get("wish_list_id"),
+                "instruction": [
+                    "Show information for uploaded data",
+                    "Call check_upload_product_list_excel_data_status with wish_list_id for checking status of the upload process"
+                ]
+            }
+        elif response.status_code == 401:
+            redis_client.delete(f"sds_mcp:{session_id}")
+            return {
+                "status": "error",
+                "error": "Authentication expired",
+                "instruction": "Your session has expired. Please login again with your access token."
+            }
+        else:
+            try:
+                error_msg = response.json().get("error_message", None)
+                return {
+                    "status": "error",
+                    "error": error_msg if error_msg else response.text,
+                }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to upload product list with status {response.status_code}",
+                    "instruction": "Ask user to verify the uploaded file and follow the step in upload_product_list_excel_file tool again"
+                }
+    except Exception as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
         }
 
 
 @mcp.tool()
-async def map(session_id: str, request_id: str) -> dict:
+async def check_upload_product_list_excel_data_status(session_id: str, wish_list_id: str) -> dict:
     """
-    Get the product list from the specified request ID.
+    Check and notify the status for process_upload_product_list_excel_data tool to user.
 
     REQUIRED: User must be authenticated using the login tool first.
+
+    IMPORTANT GUIDELINES:
+    - This should only be called after process_upload_product_list_excel_data tool.
+    - If not found wish_list_id, ask user to follow the instruction from upload_product_list_excel_file tool.
+    - If progress finished for all substance (Ex. N/N), show information.
+    - If progress is not finished, show information for current progres and call check_upload_product_list_excel_data_status tool with wish_list_id again.
     """
-    
-    
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+    endpoint = f"{BACKEND_URL}/binder/getImportProductListStatus/?id={wish_list_id}"
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            progress = data.get("progress")
+            return {
+                "status": "success", 
+                "data": data,
+                "progress": progress,
+                "instruction": [
+                    "Show information for current progress in data",
+                    "If progress is not finished, call check_upload_product_list_excel_data_status tool with wish_list_id again."
+                ]
+            }
+        else:
+            return {
+                "status": "error", 
+                "error": f"Request failed with status {response.status_code}",
+                "instruction": "Failed to get upload status. Please try again."
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
