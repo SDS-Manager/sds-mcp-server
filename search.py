@@ -14,7 +14,7 @@ logger = logging.getLogger(__name__)
 # Initialize MCP server with proper description
 mcp = FastMCP(
     name="SDS Manager",
-    instructions="SDS Manager API.",
+    instructions="SDS Manager API (User must be authenticated using the login tool first).",
     stateless_http=True,
 )
 
@@ -80,11 +80,18 @@ async def login(access_token: str) -> Dict[str, Any]:
                 "instruction": "Invalid or expired access token. Please provide a valid access token."
             }
         else:
-            return {
-                "status": "error",
-                "error": f"Authentication failed with status {response.status_code}",
-                "instruction": "Please check your access token and try again."
-            }
+            try:
+                error_msg = response.json().get("error_message", None)
+                return {
+                    "status": "error",
+                    "notification": error_msg if error_msg else response.text,
+                }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to login with status {response.status_code}",
+                    "instruction": "Failed to login. Please try again."
+                }
     except requests.exceptions.RequestException as e:
         return {
             "status": "error",
@@ -129,10 +136,12 @@ async def search_global_database(
     region_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Search for Safety Data Sheets (SDS) from the global database by keywords (Do not need authentication).
+    Search for Safety Data Sheets (SDS) from the global database by keywords.
+
+    REQUIRED: User must be authenticated using the login tool first.
     
     IMPORTANT GUIDELINES:
-    - If user ask to search without mentioning internally or globally, do search_global_database tool and search_customer_library tool (if authenticated).
+    - If user ask to search without mentioning internally or globally, do search_global_database tool and search_customer_library tool.
     - Do not perform broader search. If no results, only show suggestion for user to choose.
     - Display in a table for the response results with columns: "ID", "Product Name", "Product Code", "Manufacturer Name", "Revision Date", "Language", "Regulation Area", "Public Link", "Discovery Link".
     - Auto convert to language/region code if user input language/region name (e.g., "English" -> "en", "Europe" -> "EU", etc.).
@@ -1183,6 +1192,44 @@ async def check_upload_product_list_excel_data_status(session_id: str, wish_list
     - If progress finished for all substance (Ex. N/N), show information.
     - If progress is not finished, show information for current progres and call check_upload_product_list_excel_data_status tool with wish_list_id again.
     """
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+    endpoint = f"{BACKEND_URL}/binder/getImportProductListStatus/?id={wish_list_id}"
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            progress = data.get("progress")
+            return {
+                "status": "success", 
+                "data": data,
+                "progress": progress,
+                "instruction": [
+                    "Show information for current progress in data",
+                    "If progress is not finished, call check_upload_product_list_excel_data_status tool with wish_list_id again."
+                ]
+            }
+        else:
+            return {
+                "status": "error", 
+                "error": f"Request failed with status {response.status_code}",
+                "instruction": "Failed to get upload status. Please try again."
+            }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
     
     
 @mcp.tool()
@@ -1256,6 +1303,7 @@ async def get_sds_request(session_id: str, search: str = "", page: int = 1, page
             "error": f"Connection error: {str(e)}",
             "instruction": "Failed to connect to service. Please try again."
         }
+
 
 @mcp.tool()
 async def edit_sds_data(
@@ -1380,6 +1428,3 @@ async def edit_sds_data(
             "error": f"Connection error: {str(e)}",
             "instruction": "Failed to connect to update service. Please try again."
         }
-
-    
-    
