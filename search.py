@@ -1,7 +1,13 @@
 from mcp.server.fastmcp import FastMCP
 from cache import redis_client
 from typing import Dict, Any, List, Optional
-from config import BACKEND_URL, SDS_HEADER_NAME, PORT, DOMAIN
+from config import BACKEND_URL, SDS_HEADER_NAME, DOMAIN
+from models import (
+    SubstanceDetail,
+    SubstanceListApiResponse,
+    GetExtractionStatusApiResponse,
+    SearchGlobalDatabaseResponse,
+)
 import logging
 import requests
 import uuid
@@ -127,7 +133,7 @@ async def check_auth_status(session_id: str) -> Dict[str, Any]:
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Search from Global Database")
 async def search_global_database(
     keyword: str, 
     page: int = 1, 
@@ -162,15 +168,17 @@ async def search_global_database(
         if response.status_code == 200:
             data = response.json()
             results = data.get("results", [])
-            count = data.get("count", 0)
+
+            res = SearchGlobalDatabaseResponse(**data)
+            results = [sds.model_dump(by_alias=True) for sds in res.results]
+      
             return {
                 "status": "success",
-                "keyword": keyword,
+                "keyword": keyword,  
                 "results": results,
-                "count": count,
-                "next": data.get("next"),
-                "previous": data.get("previous"),
-                "facets": data.get("facets", {}),
+                "count": res.count,
+                "next": res.next,
+                "previous": res.previous,
                 "page": page,
                 "page_size": page_size
             }
@@ -195,7 +203,7 @@ async def search_global_database(
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Search from Customer Library")
 async def search_customer_library(session_id: str, keyword: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
     """
     Search for substances (SDS assigned to a location) from customer's library by keywords.
@@ -234,12 +242,22 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
 
         if response.status_code == 200:
             data = response.json()
-            return {
-                "status": "success",
-                "keyword": keyword,
-                "results": data.get("results", []),
-                "count": data.get("count", 0)
-            }
+            try:
+                res = SubstanceListApiResponse(**data)
+                
+                return {
+                    "status": "success",
+                    "keyword": keyword,
+                    "results": [substance.model_dump(by_alias=True) for substance in res.results],
+                    "count": res.count
+                }
+            except ValueError as e:
+                return {
+                    "status": "success",
+                    "keyword": keyword,
+                    "results": data.get("results", []),
+                    "count": data.get("count", 0),
+                }
         elif response.status_code == 401:
             redis_client.delete(f"sds_mcp:{session_id}")
             return {
@@ -268,7 +286,7 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Add SDS")
 async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) -> Dict[str, Any]:
     """
     Add an SDS document from the global database to a specific location.
@@ -343,7 +361,7 @@ async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) ->
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Move SDS")
 async def move_sds_to_location(session_id: str, substance_id: str, location_id: str) -> Dict[str, Any]:
     """
     Move a substance (SDS assigned to a location) to a specific location.
@@ -418,7 +436,7 @@ async def move_sds_to_location(session_id: str, substance_id: str, location_id: 
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Copy SDS")
 async def copy_sds_substance(session_id: str, substance_id: str, location_id: str) -> Dict[str, Any]:
     """
     Add the selected substance (SDS assigned to a location) to the target location/department with similar information.
@@ -493,7 +511,7 @@ async def copy_sds_substance(session_id: str, substance_id: str, location_id: st
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Archive SDS")
 async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str, Any]:
     """
     Move a substance (SDS assigned to a location) to archive.
@@ -565,7 +583,7 @@ async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str,
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Get location structure")
 async def get_location(session_id: str) -> List[Dict[str, Any]]:
     """
     Get location tree list for the current user.
@@ -630,7 +648,7 @@ async def get_location(session_id: str) -> List[Dict[str, Any]]:
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Add location")
 async def add_location(session_id: str, name: str, parent_department_id: Optional[str] = None) -> Dict[str, Any]:
     """
     Add new location.
@@ -704,7 +722,7 @@ async def add_location(session_id: str, name: str, parent_department_id: Optiona
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Get substance details")
 async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[str, Any]:
     """
     Get details for a specific substance (SDS assigned to a location) in the customer's inventory.
@@ -741,7 +759,23 @@ async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[
     try:
         response = requests.get(endpoint, headers=headers, timeout=30)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            try:
+                # Create DTO from API response
+                substance_dto = SubstanceDetail(**data)
+                
+                return {
+                    "status": "success",
+                    "result": substance_dto.model_dump(by_alias=True)
+                }
+            except ValueError as e:
+                logger.warning(f"Failed to create DTO for substance detail {substance_id}: {e}")
+                # Fallback to raw data if DTO creation fails
+                return {
+                    "status": "success",
+                    "result": data,
+                    "dto_warning": "Failed to validate data structure, returning raw data"
+                }
         elif response.status_code == 401:
             redis_client.delete(f"sds_mcp:{session_id}")
             return {
@@ -770,7 +804,7 @@ async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Get hazardous substances")
 async def get_sdss_with_ingredients(session_id: str, keyword: str = "", page: int = 1, page_size: int = 10) -> Dict[str, Any]:
     """
     Get or Search hazardous SDSs with detail information on ingredients/components that restricted on regulation list.
@@ -857,7 +891,7 @@ async def get_sdss_with_ingredients(session_id: str, keyword: str = "", page: in
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Upload SDS file")
 async def upload_sds_pdf_to_location(session_id: str, department_id: str):
     """
     Upload SDS file to the specified location.
@@ -895,7 +929,7 @@ async def upload_sds_pdf_to_location(session_id: str, department_id: str):
     }
     
 
-@mcp.tool()
+@mcp.tool(title="Check upload SDS file status")
 async def check_upload_sds_pdf_to_location_status(session_id: str, request_id: str) -> dict:
     """
     Check and notify the status for upload_sds_pdf_to_location tool.
@@ -923,11 +957,11 @@ async def check_upload_sds_pdf_to_location_status(session_id: str, request_id: s
     try:
         response = requests.get(endpoint, headers=headers, timeout=30)
         if response.status_code == 200:
-            data = response.json()
-            progress = data.get("progress", 0)
+            data = GetExtractionStatusApiResponse(**response.json())
+            progress = data.progress
             return {
                 "status": "success", 
-                "data": data,
+                "data": data.model_dump(by_alias=True),
                 "progress": progress,
                 "instruction": [
                     "Show information for current progress in data",
@@ -948,7 +982,7 @@ async def check_upload_sds_pdf_to_location_status(session_id: str, request_id: s
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Upload Product List")
 async def upload_product_list_excel_file(session_id: str) -> Dict[str, Any]:
     """
     Upload Product List excel file to the customer's inventory.
@@ -978,7 +1012,7 @@ async def upload_product_list_excel_file(session_id: str) -> Dict[str, Any]:
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Validate uploaded Product List")
 async def validate_upload_product_list_excel_data(
     session_id: str, 
     request_id: str
@@ -1047,7 +1081,7 @@ async def validate_upload_product_list_excel_data(
     }
 
 
-@mcp.tool()
+@mcp.tool(title="Process uploaded Product List")
 async def process_upload_product_list_excel_data(
     session_id: str, 
     request_id: str,
@@ -1179,7 +1213,7 @@ async def process_upload_product_list_excel_data(
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Check upload Product List status")
 async def check_upload_product_list_excel_data_status(session_id: str, wish_list_id: str) -> dict:
     """
     Check and notify the status for process_upload_product_list_excel_data tool to user.
@@ -1232,10 +1266,10 @@ async def check_upload_product_list_excel_data_status(session_id: str, wish_list
         }
     
     
-@mcp.tool()
+@mcp.tool(title="Get list of Pending SDS Requests")
 async def get_sds_request(session_id: str, search: str = "", page: int = 1, page_size: int = 10):
     """
-    Retrieve pending SDS (Safety Data Sheet) requests.
+    Get list of pending SDS (Safety Data Sheet) requests.
 
     REQUIREMENTS:
         - User must be authenticated with the login tool before calling this function.
@@ -1305,7 +1339,7 @@ async def get_sds_request(session_id: str, search: str = "", page: int = 1, page
         }
 
 
-@mcp.tool()
+@mcp.tool(title="Update SDS data")
 async def edit_sds_data(
     session_id: str,
     substance_id: str,
