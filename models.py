@@ -2,21 +2,31 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 
+class PaginatedResponse(BaseModel):
+    count: int
+    next: Optional[str] = None
+    previous: Optional[str] = None
+    results: List[Any] = Field(default_factory=list)
 
-class SDSGlobalDatabase(BaseModel):
+
+class GlobalSdsSearch(BaseModel):
     model_config = {"extra": "ignore"}
     id: int
     sds_pdf_product_name: str = Field(serialization_alias="product_name")
-    sds_pdf_manufacture_name: str = Field(serialization_alias="manufacturer_name")
-    sds_pdf_revision_date: str = Field(serialization_alias="revision_date")
-    language: str = Field(serialization_alias="language_name")
+    producer_name: str = Field(serialization_alias="supplier_name")
+    sds_pdf_revision_date: Optional[str] = Field(serialization_alias="revision_date")
+    language: Optional[str] = Field(serialization_alias="language_name")
+    language_code: Optional[str]
     regulation_area: Optional[str] = None
     cas_no: Optional[str] = None
-    link_to_public_view: str = Field(serialization_alias="file_url")
+    link_to_public_view: Optional[str] = Field(serialization_alias="file_url")
     product_code: Optional[str] = None
     version: Optional[str] = None
-    related_locations: List[str] = Field(default_factory=list)
-    language_code: str
+    related_locations: Optional[List[str]] = Field(default_factory=list)
+
+
+class SearchGlobalDatabaseResponse(PaginatedResponse):
+    results: List[GlobalSdsSearch] = Field(default_factory=list)
 
 
 class Location(BaseModel):
@@ -25,9 +35,9 @@ class Location(BaseModel):
 
 
 class Icon(BaseModel):
-    url: str
-    description: str
-    type: str
+    url: Optional[str]
+    description: Optional[str]
+    type: Optional[str]
 
 
 class HighestRisks(BaseModel):
@@ -46,14 +56,14 @@ class HighestStorageRisks(BaseModel):
 
 class Language(BaseModel):
     id: int
-    code: str
-    name: str
+    code: Optional[str]
+    name: Optional[str]
 
 
 class Regulation(BaseModel):
     model_config = {"extra": "ignore"}
     url: Optional[str] = None
-    json_data: Dict[str, Any] = Field(default_factory=dict, alias="json")
+    json_data: Optional[Dict[str, Any]] = Field(default_factory=dict, alias="json")
     ec_no: Optional[str] = None
     cas_no: Optional[str] = None
     listing: Optional[str] = None
@@ -64,27 +74,27 @@ class Regulation(BaseModel):
 
 class HazardCode(BaseModel):
     id: int
-    edited: bool
-    statements: str
-    statement_code: str
+    edited: Optional[bool]
+    statements: Optional[str]
+    statement_code: Optional[str]
 
 
 class PrecautionaryCode(BaseModel):
     id: int
-    edited: bool
-    statements: str
-    statement_code: str
+    edited: Optional[bool]
+    statements: Optional[str]
+    statement_code: Optional[str]
 
 
 class SDSChemical(BaseModel):
     model_config = {"extra": "ignore"}
     ec_no: Optional[str] = None
-    cas_no: str
-    conc_no: str
+    cas_no: Optional[str]
+    conc_no: Optional[str]
     conc_to: Optional[float] = None
     reach_no: Optional[str] = None
     conc_from: Optional[float] = None
-    chemical_name: str
+    chemical_name: Optional[str]
     name_from_library: Optional[bool] = None
     raw_chemical_name: Optional[str] = None
     hazards_statements: Optional[str] = None
@@ -103,33 +113,33 @@ class SDSInfo(BaseModel):
     version: Optional[str] = None
     ean_code: Optional[str] = None
     iso_icon: Optional[str] = None
-    language: Language
+    language: Optional[Language] = None
     revision: Optional[str] = None
     upc_code: Optional[str] = None
-    euh_codes: List[Any] = Field(default_factory=list)
+    euh_codes: Optional[List[Any]] = Field(default_factory=list)
     telephone: Optional[str] = None
     components: Optional[str] = None
     issue_date: Optional[str] = None
     trade_name: Optional[str] = None
     health_risk: Optional[int] = None
     master_date: Optional[str] = None
-    regulations: List[Regulation] = Field(default_factory=list)
+    regulations: Optional[List[Regulation]] = Field(default_factory=list)
     safety_risk: Optional[int] = None
     signal_word: Optional[str] = None
-    hazard_codes: List[HazardCode] = Field(default_factory=list)
+    hazard_codes: Optional[List[HazardCode]] = Field(default_factory=list)
     intented_use: Optional[str] = None
-    is_hazardous: bool
+    is_hazardous: Optional[bool]
     printed_date: Optional[str] = None
     product_code: Optional[str] = None
     reach_reg_no: Optional[str] = None
-    sds_chemical: List[SDSChemical] = Field(default_factory=list)
+    sds_chemical: Optional[List[SDSChemical]] = Field(default_factory=list)
     chemical_name: Optional[str] = None
     ec_components: Optional[str] = None
     material_name: Optional[str] = None
     product_group: Optional[str] = None
     purchase_year: Optional[str] = None
     revision_date: Optional[str] = None
-    english_sdspdf: bool
+    english_sdspdf: Optional[bool]
     published_date: Optional[str] = None
     substance_name: Optional[str] = None
     chemical_family: Optional[str] = None
@@ -138,19 +148,18 @@ class SDSInfo(BaseModel):
     environment_risk: Optional[int] = None
     hazard_statement: Optional[str] = None
     signal_word_code: Optional[str] = None
-    recompute_version: List[str] = Field(default_factory=list)
     external_system_id: Optional[str] = None
     ghs_pictogram_code: Optional[str] = None
     product_identifier: Optional[str] = None
     newer_revision_date: Optional[str] = None
-    precautionary_codes: List[PrecautionaryCode] = Field(default_factory=list)
-    private_regulations: List[Any] = Field(default_factory=list)
+    precautionary_codes: Optional[List[PrecautionaryCode]] = Field(default_factory=list)
+    private_regulations: Optional[List[Any]] = Field(default_factory=list)
     sds_pdf_product_name: Optional[str] = None
     used_advised_against: Optional[str] = None
-    is_hazardous_chemical: bool
+    is_hazardous_chemical: Optional[bool]
     chemical_name_synonyms: Optional[str] = None
-    private_regulation_ids: List[Any] = Field(default_factory=list)
-    regulation_listing_ids: List[int] = Field(default_factory=list)
+    private_regulation_ids: Optional[List[Any]] = Field(default_factory=list)
+    regulation_listing_ids: Optional[List[int]] = Field(default_factory=list)
     company_name_distributor: Optional[str] = None
     sds_pdf_manufacture_name: Optional[str] = None
     company_name_supplier_sds: Optional[str] = None
@@ -158,65 +167,66 @@ class SDSInfo(BaseModel):
     emergency_telephone_number: Optional[str] = None
     producer_of_sds_company_name: Optional[str] = None
     hazard_category_abbreviations: Optional[str] = None
-    private_regulation_listing_ids: List[Any] = Field(default_factory=list)
+    private_regulation_listing_ids: Optional[List[Any]] = Field(default_factory=list)
 
 
 class SDSOtherInfoItem(BaseModel):
     tag: str
-    value: str
-    default_literal: str
-    no_data_available: bool
+    value: Optional[str]
+    default_literal: Optional[str]
+    no_data_available: Optional[bool]
 
 
 class SubstanceDetail(BaseModel):
     model_config = {"extra": "ignore"}
     id: int
-    is_archived: bool
-    sds_id: int
-    public_view_url: str = Field(serialization_alias="file_url")
-    safety_summary_url: str = Field(serialization_alias="safety_summary_url")
-    language: str
-    product_name: str
-    supplier_name: str
-    product_code: str
-    revision_date: str
-    created_date: str
+    is_archived: Optional[bool]
+    sds_id: Optional[int]
+    public_view_url: Optional[str] = Field(serialization_alias="file_url")
+    safety_summary_url: Optional[str] = Field(serialization_alias="safety_summary_url")
+    language: Optional[str]
+    product_name: Optional[str]
+    supplier_name: Optional[str]
+    product_code: Optional[str]
+    revision_date: Optional[str]
+    created_date: Optional[str]
     ean_code: Optional[str] = None
     upc_code: Optional[str] = None
     external_system_id: Optional[str] = None
     external_system_url: Optional[str] = None
-    hazard_sentences: str
-    euh_sentences: str
-    prevention_sentences: str
-    location: Location
+    hazard_sentences: Optional[str]
+    euh_sentences: Optional[str]
+    prevention_sentences: Optional[str]
+    location: Optional[Location] = None
     substance_amount: Optional[str] = None
     substance_approval: Optional[str] = None
     nfpa: Optional[str] = None
     hmis: Optional[str] = None
-    icons: List[Icon] = Field(default_factory=list)
-    highest_risks: HighestRisks
-    highest_storage_risks: HighestStorageRisks
+    icons: Optional[List[Icon]] = Field(default_factory=list)
+    highest_risks: Optional[HighestRisks] = None
+    highest_storage_risks: Optional[HighestStorageRisks] = None
     # info_msg: Optional[str] = None
     # attachments: List[Any] = Field(default_factory=list)
-    sds_info: SDSInfo
-    sds_other_info: Dict[str, List[SDSOtherInfoItem]] = Field(default_factory=dict)
+    sds_info: Optional[SDSInfo] = None
+    sds_other_info: Optional[Dict[str, List[SDSOtherInfoItem]]] = Field(default_factory=dict)
+
 
 class SDSRequest(BaseModel):
     model_config = {"extra": "ignore"}
     id: int
-    product_name: Optional[str] = Field(serialization_alias="product_name")
-    supplier_name: Optional[str] = Field(serialization_alias="manufacturer_name")
-    product_code: Optional[str] = Field(serialization_alias="product_code")
-    revision_date: str = Field(serialization_alias="revision_date")
+    product_name: str
+    supplier_name: str
+    product_code: Optional[str]
+    revision_date: Optional[str]
     language: Optional[str] = Field(serialization_alias="language_name")
-    created_date: str
-    department: Optional[dict] = Field(serialization_alias="department")
+    created_date: Optional[str]
+    department: Optional[dict]
+    created_by: Optional[dict]
 
-class PaginatedResponse(BaseModel):
-    count: int
-    next: Optional[str] = None
-    previous: Optional[str] = None
-    results: List[Any] = Field(default_factory=list)
+
+class SdsRequestResponse(PaginatedResponse):
+    results: List[SDSRequest] = Field(default_factory=list)
+
 
 class SubstanceListApiResponse(PaginatedResponse):
     results: List[SubstanceDetail] = Field(default_factory=list)
@@ -228,13 +238,15 @@ class FileInfo(BaseModel):
     step: str
     progress: int
     file_name: str
-    file_path: str
+    file_path: Optional[str]
+
 
 class BookletInfo(BaseModel):
     model_config = {"extra": "ignore"}
     
     booklet_id: int
-    booklet_view_url: str = Field(serialization_alias="file_url")
+    booklet_view_url: Optional[str] = Field(serialization_alias="file_url")
+
 
 class GetExtractionStatusApiResponse(BaseModel):
     model_config = {"extra": "ignore"}
@@ -245,14 +257,8 @@ class GetExtractionStatusApiResponse(BaseModel):
     progress: int
     file_info: Optional[Dict[str, FileInfo]] = Field(default_factory=dict)
     compression_file_info: Optional[Dict[str, Any]] = Field(default_factory=dict)
-    init_time: str
-    booklet_info: Optional[Dict[str, BookletInfo]] = Field(default_factory=dict)
-
-
-
-class SearchGlobalDatabaseResponse(BaseModel):
-    model_config = {"extra": "ignore"}
-    results: List[SDSGlobalDatabase] = Field(default_factory=list)
-    count: int
-    next: Optional[str] = None
-    previous: Optional[str] = None
+    init_time: Optional[str]
+    booklet_info: Optional[Dict[str, BookletInfo]] = Field(
+        default_factory=dict,
+        serialization_alias="imported_info"
+    )
