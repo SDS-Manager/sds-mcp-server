@@ -7,6 +7,7 @@ from models import (
     SubstanceListApiResponse,
     GetExtractionStatusApiResponse,
     SearchGlobalDatabaseResponse,
+    SdsRequestResponse,
 )
 import logging
 import requests
@@ -29,6 +30,9 @@ mcp = FastMCP(
 async def login(access_token: str) -> Dict[str, Any]:
     """
     Authenticate user with API key.
+
+    IMPORTANT GUIDELINES:
+    - If user not provide access token, ask user to provide access token (API key).
 
     Returns: Dictionary with authentication status, user information, and available actions:
         - status: "success" or "error"
@@ -73,17 +77,11 @@ async def login(access_token: str) -> Dict[str, Any]:
                 },
                 "session_id": session_id,
                 "next_action_suggestion": [
-                    "Search action: search_global_database tool, search_customer_library tool",
+                    "Search action: search_sds_global_database tool, search_substances_customer_library tool",
                     "Location action: get_location tool, add_location tool, add_sds_to_location tool",
                     "Substance action: move_sds_to_location tool, copy_sds_substance tool, archive_sds_substance tool, archive_sds_substance tool",
                     "User action: check_auth_status tool"
                 ],
-            }
-        elif response.status_code == 401:
-            return {
-                "status": "error",
-                "error": "Authentication failed",
-                "instruction": "Invalid or expired access token. Please provide a valid access token."
             }
         else:
             try:
@@ -133,8 +131,9 @@ async def check_auth_status(session_id: str) -> Dict[str, Any]:
         }
 
 
-@mcp.tool(title="Search from Global Database")
-async def search_global_database(
+@mcp.tool(title="Search SDSs from Global Database")
+async def search_sds_global_database(
+    session_id: str,
     keyword: str, 
     page: int = 1, 
     page_size: int = 10, 
@@ -142,17 +141,34 @@ async def search_global_database(
     region_code: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
-    Search for Safety Data Sheets (SDS) from the global database by keywords.
+    Search for Safety Data Sheets (SDS) from the global database.
 
     REQUIRED: User must be authenticated using the login tool first.
     
     IMPORTANT GUIDELINES:
-    - If user ask to search without mentioning internally or globally, do search_global_database tool and search_customer_library tool.
+    - If user ask to search without mentioning internally or globally, do search_sds_global_database tool and search_substances_customer_library tool.
     - Do not perform broader search. If no results, only show suggestion for user to choose.
     - Display in a table for the response results with columns: "ID", "Product Name", "Product Code", "Manufacturer Name", "Revision Date", "Language", "Regulation Area", "Public Link", "Discovery Link".
-    - Auto convert to language/region code if user input language/region name (e.g., "English" -> "en", "Europe" -> "EU", etc.).
+    - Auto convert to language/region code if user input language/region name (e.g., "English" -> "en", "Europe" -> "eu", etc.).
     - Do not use ID as search keyword.
     """
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
     try:
         search_param = f"?search={keyword}&page={page}&page_size={page_size}"
         if language_code:
@@ -162,25 +178,29 @@ async def search_global_database(
 
         response = requests.get(
             f"{BACKEND_URL}/pdfs/{search_param}",
+            headers=headers,
             timeout=10
         )
 
         if response.status_code == 200:
             data = response.json()
-            results = data.get("results", [])
-
             res = SearchGlobalDatabaseResponse(**data)
-            results = [sds.model_dump(by_alias=True) for sds in res.results]
       
             return {
                 "status": "success",
-                "keyword": keyword,  
-                "results": results,
+                "results": [substance.model_dump(by_alias=True) for substance in res.results],
                 "count": res.count,
-                "next": res.next,
-                "previous": res.previous,
+                "next_page": int(page) + 1 if res.next else None,
+                "previous_page": int(page) - 1 if res.previous else None,
                 "page": page,
                 "page_size": page_size
+            }
+        elif response.status_code == 401:
+            redis_client.delete(f"sds_mcp:{session_id}")
+            return {
+                "status": "error",
+                "error": "Authentication expired",
+                "instruction": "Your session has expired. Please login again with your access token."
             }
         else:
             try:
@@ -203,19 +223,89 @@ async def search_global_database(
         }
 
 
-@mcp.tool(title="Search from Customer Library")
-async def search_customer_library(session_id: str, keyword: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+@mcp.tool(title="Show SDS details")
+async def show_sds_detail(session_id: str, sds_id: str) -> Dict[str, Any]:
     """
-    Search for substances (SDS assigned to a location) from customer's library by keywords.
+    Show detail information for a specific SDS on global database.
+
+    REQUIRES: User must be authenticated using the login tool first.
+
+    IMPORTANT GUIDELINES:
+    - If not found any information of the SDS, ask user to provide SDS name.
+    - When user input SDS name, call search_sds_global_database tool with keyword as SDS name.
+    - Always ask user to choose which SDS if multiple SDS found.
+    - If seeing error message, display the error message to user.
+
+    Returns: Detail information of the SDS
+    """
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "No active session found",
+            "instruction": "Please login first using the login tool with your access token"
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    endpoint = f"{BACKEND_URL}/pdfs/{sds_id}/"
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            return {
+                "status": "success",
+                "data": response.json()
+            }
+        elif response.status_code == 401:
+            redis_client.delete(f"sds_mcp:{session_id}")
+            return {
+                "status": "error",
+                "error": "Authentication expired",
+                "instruction": "Your session has expired. Please login again with your access token."
+            }
+        else:
+            try:
+                error_msg = response.json().get("error_message", None)
+                return {
+                    "status": "error",
+                    "error": error_msg if error_msg else response.text,
+                }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to get substance with status {response.status_code}",
+                    "instruction": "Failed to get SDS. Please verify the SDS."
+                }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
+
+
+@mcp.tool(title="Search substances from Customer Library")
+async def search_substances_customer_library(session_id: str, keyword: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+    """
+    Search for substances (SDS assigned to a location) from customer's library/inventory.
 
     REQUIRED: User must be authenticated using the login tool first.
 
     IMPORTANT GUIDELINES:
-    - If user ask to search without mentioning internally or globally, do search_global_database tool and search_customer_library tool (if authenticated).
+    - If user ask to search without mentioning internally or globally, do search_sds_global_database tool and search_substances_customer_library tool.
     - Do not use ID as search keyword.
 
     Returns: List of substance information
     """
+
     if not session_id:
         return {
             "status": "error",
@@ -247,16 +337,18 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
                 
                 return {
                     "status": "success",
-                    "keyword": keyword,
                     "results": [substance.model_dump(by_alias=True) for substance in res.results],
-                    "count": res.count
+                    "count": res.count,
+                    "next_page": int(page) + 1 if res.next else None,
+                    "previous_page": int(page) - 1 if res.previous else None,
                 }
             except ValueError as e:
                 return {
                     "status": "success",
-                    "keyword": keyword,
                     "results": data.get("results", []),
                     "count": data.get("count", 0),
+                    "next_page": int(page) + 1 if data.get("next") else None,
+                    "previous_page": int(page) - 1 if data.get("previous") else None,
                 }
         elif response.status_code == 401:
             redis_client.delete(f"sds_mcp:{session_id}")
@@ -286,10 +378,92 @@ async def search_customer_library(session_id: str, keyword: str, page: int = 1, 
         }
 
 
+@mcp.tool(title="Show substance details")
+async def show_substance_detail(session_id: str, substance_id: str) -> Dict[str, Any]:
+    """
+    Show detail information for a specific substance (SDS assigned to a location) in the customer's inventory.
+
+    REQUIRES: User must be authenticated using the login tool first.
+
+    IMPORTANT GUIDELINES:
+    - If not found any information of the substance, ask user to provide SDS name.
+    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
+    - Always ask user to choose which substance if multiple substances found.
+    - If seeing error message, display the error message to user.
+
+    Returns: Detail information of the substance
+    """
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "No active session found",
+            "instruction": "Please login first using the login tool with your access token"
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    endpoint = f"{BACKEND_URL}/substance/{substance_id}/"
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+
+    try:
+        response = requests.get(endpoint, headers=headers, timeout=30)
+        if response.status_code == 200:
+            data = response.json()
+            try:
+                # Create DTO from API response
+                substance_dto = SubstanceDetail(**data)
+                
+                return {
+                    "status": "success",
+                    "result": substance_dto.model_dump(by_alias=True)
+                }
+            except ValueError as e:
+                logger.warning(f"Failed to create DTO for substance detail {substance_id}: {e}")
+                # Fallback to raw data if DTO creation fails
+                return {
+                    "status": "success",
+                    "result": data,
+                    "dto_warning": "Failed to validate data structure, returning raw data"
+                }
+        elif response.status_code == 401:
+            redis_client.delete(f"sds_mcp:{session_id}")
+            return {
+                "status": "error",
+                "error": "Authentication expired",
+                "instruction": "Your session has expired. Please login again with your access token."
+            }
+        else:
+            try:
+                error_msg = response.json().get("error_message", None)
+                return {
+                    "status": "error",
+                    "error": error_msg if error_msg else response.text,
+                }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to get substance with status {response.status_code}",
+                    "instruction": "Failed to get substance. Please verify the substance."
+                }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to service. Please try again."
+        }
+
+
 @mcp.tool(title="Add SDS")
 async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) -> Dict[str, Any]:
     """
-    Add an SDS document from the global database to a specific location.
+    Add an SDS from the global database to a specific location.
 
     REQUIRED: User must be authenticated using the login tool first.
 
@@ -298,7 +472,7 @@ async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) ->
     - If not found any information of SDS, ask user to provide SDS name.
     - When user input location name, call get_location tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
-    - When user input SDS name, call search_global_database tool with keyword as SDS name.
+    - When user input SDS name, call search_sds_global_database tool with keyword as SDS name.
     - Always ask user to choose which SDS if multiple SDS found.
 
     RETURN: Information of the newly added substance
@@ -373,7 +547,7 @@ async def move_sds_to_location(session_id: str, substance_id: str, location_id: 
     - If not found any information of SDS, ask user to provide SDS name.
     - When user input location name, call get_location tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
-    - When user input SDS name, call search_customer_library tool with keyword as SDS name.
+    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substance found.
     
     Return: Information of the moved substance
@@ -448,7 +622,7 @@ async def copy_sds_substance(session_id: str, substance_id: str, location_id: st
     - If not found any information of SDS, ask user to provide SDS name.
     - When user input location name, call get_location tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
-    - When user input SDS name, call search_customer_library tool with keyword as SDS name.
+    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substance found.
 
     Return: Information of the added substance
@@ -521,7 +695,7 @@ async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str,
 
     IMPORTANT GUIDELINES:
     - If not found any information of SDS, ask user to provide SDS name.
-    - When user input SDS name, call search_customer_library tool with keyword as SDS name.
+    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substance found.
 
     Return: Information of the archived substance
@@ -713,88 +887,6 @@ async def add_location(session_id: str, name: str, parent_department_id: Optiona
                     "status": "error",
                     "error": f"Failed to add location with status {response.status_code}",
                     "instruction": "Failed to add location. Please verify location information."
-                }
-    except requests.exceptions.RequestException as e:
-        return {
-            "status": "error",
-            "error": f"Connection error: {str(e)}",
-            "instruction": "Failed to connect to service. Please try again."
-        }
-
-
-@mcp.tool(title="Get substance details")
-async def retrieve_substance_detail(session_id: str, substance_id: str) -> Dict[str, Any]:
-    """
-    Get details for a specific substance (SDS assigned to a location) in the customer's inventory.
-
-    REQUIRES: User must be authenticated using the login tool first.
-
-    IMPORTANT GUIDELINES:
-    - If not found any information of the substance, ask user to provide SDS name.
-    - When user input SDS name, call search_customer_library tool with keyword as SDS name.
-    - Always ask user to choose which substance if multiple substance found.
-    - If seeing error message, display the error message to user.
-
-    Returns: Detail information of the substance
-    """
-
-    if not session_id:
-        return {
-            "status": "error",
-            "error": "No active session found",
-            "instruction": "Please login first using the login tool with your access token"
-        }
-
-    info = redis_client.get(f"sds_mcp:{session_id}")
-    if not info:
-        return {
-            "status": "error",
-            "error": "Access token not found in session",
-            "instruction": "Session expired. Please login again using the login tool."
-        }
-
-    endpoint = f"{BACKEND_URL}/substance/{substance_id}/"
-    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
-
-    try:
-        response = requests.get(endpoint, headers=headers, timeout=30)
-        if response.status_code == 200:
-            data = response.json()
-            try:
-                # Create DTO from API response
-                substance_dto = SubstanceDetail(**data)
-                
-                return {
-                    "status": "success",
-                    "result": substance_dto.model_dump(by_alias=True)
-                }
-            except ValueError as e:
-                logger.warning(f"Failed to create DTO for substance detail {substance_id}: {e}")
-                # Fallback to raw data if DTO creation fails
-                return {
-                    "status": "success",
-                    "result": data,
-                    "dto_warning": "Failed to validate data structure, returning raw data"
-                }
-        elif response.status_code == 401:
-            redis_client.delete(f"sds_mcp:{session_id}")
-            return {
-                "status": "error",
-                "error": "Authentication expired",
-                "instruction": "Your session has expired. Please login again with your access token."
-            }
-        else:
-            try:
-                error_msg = response.json().get("error_message", None)
-                return {
-                    "status": "error",
-                    "error": error_msg if error_msg else response.text,
-                }
-            except:
-                return {
-                    "status": "error",
-                    "error": f"Failed to get substance with status {response.status_code}",
-                    "instruction": "Failed to get substance. Please verify the substance."
                 }
     except requests.exceptions.RequestException as e:
         return {
@@ -1249,7 +1341,8 @@ async def check_upload_product_list_excel_data_status(session_id: str, wish_list
                 "progress": progress,
                 "instruction": [
                     "Show information for current progress in data",
-                    "If progress is not finished, call check_upload_product_list_excel_data_status tool with wish_list_id again."
+                    "If progress is not finished, call check_upload_product_list_excel_data_status tool with wish_list_id again.",
+                    "If there are unmatched substances, suggest user to list them by calling get_sds_request tool with wish_list_id from data."
                 ]
             }
         else:
@@ -1266,32 +1359,25 @@ async def check_upload_product_list_excel_data_status(session_id: str, wish_list
         }
     
     
-@mcp.tool(title="Get list of Pending SDS Requests")
-async def get_sds_request(session_id: str, search: str = "", page: int = 1, page_size: int = 10):
+@mcp.tool(title="Get list of SDS Requests (Unmatched Substances)")
+async def get_sds_request(
+    session_id: str, 
+    search: str = "", 
+    wish_list_id: str = "",
+    page: int = 1, 
+    page_size: int = 10
+):
     """
-    Get list of pending SDS (Safety Data Sheet) requests.
+    Get/Search substance requests that have not been matched to any SDS.
+    Synonyms: Unmatched SDS, unmatched substances, SDS requests, substance requests, etc.
 
-    REQUIREMENTS:
-        - User must be authenticated with the login tool before calling this function.
-        - `session_id` (str): Active session identifier.
+    REQUIRED: User must be authenticated using the login tool first.
 
-    PARAMETERS:
-        - `search` (str, optional): Keyword to filter SDS requests. Defaults to "" (no filter).
-        - `page` (int, optional): Page number for pagination. Defaults to 1.
-        - `page_size` (int, optional): Number of items per page. Defaults to 10.
+    IMPORTANT GUIDELINES:
+    - If user want to match substances, call search_sds_global_database tool with keyword = supplier_name + product_name of that request.
 
-    BEHAVIOR:
-        - If no `search` term is provided:
-            • Ask the user if they want to supply one.
-            • If still none, call with `search=""` to fetch all requests.
-        - If a `search` term is provided, pass it directly to filter the results.
-        - After returning results, ask the user if they would like to see more (next page).
-
-    RETURNS:
-        - JSON response with the list of pending SDS requests.
-        - Error response if session is invalid, expired, or service is unavailable.
+    RETURNS: Information about SDS requests.
     """
-
 
     if not session_id:
         return {
@@ -1314,10 +1400,30 @@ async def get_sds_request(session_id: str, search: str = "", page: int = 1, page
     if search:
         endpoint += f"&search={search}"
 
+    if wish_list_id:
+        endpoint += f"&wish_list_id={wish_list_id}"
+
     try:
         response = requests.get(endpoint, headers=headers, timeout=30)
         if response.status_code == 200:
-            return response.json()
+            data = response.json()
+            try:
+                res = SdsRequestResponse(**data)
+                return {
+                    "status": "success",
+                    "results": [item.model_dump(by_alias=True) for item in res.results],
+                    "count": res.count,
+                    "next_page": int(page) + 1 if res.next else None,
+                    "previous_page": int(page) - 1 if res.previous else None,
+                }
+            except ValueError as e:
+                return {
+                    "status": "success",
+                    "results": data.get("results", []),
+                    "count": data.get("count", 0),
+                    "next_page": int(page) + 1 if data.get("next") else None,
+                    "previous_page": int(page) - 1 if data.get("previous") else None,
+                }
         else:
             try:
                 error_msg = response.json().get("error_message", None)
@@ -1339,6 +1445,84 @@ async def get_sds_request(session_id: str, search: str = "", page: int = 1, page
         }
 
 
+@mcp.tool(title="Match substance request to a SDS")
+async def match_sds_request(session_id: str, substance_request_id: str, sds_id: str, use_sds_data: bool) -> Dict[str, Any]:
+    """
+    Match a substance request to a SDS.
+    Synonyms: Unmatched SDS, unmatched substances, SDS requests, substance requests, etc.
+
+    REQUIRED: User must be authenticated via the login tool first.
+
+    IMPORTANT GUIDELINES:
+    - If not found substance_request_id, call get_sds_request tool and ask user to choose.
+    - Always ask user to choose which substance request if multiple substance request found from get_sds_request tool.
+    - If not found sds_id, ask user to provide SDS name and call search_sds_global_database tool with keyword as SDS name.
+    - Always ask user to choose which SDS if multiple SDS found from search_sds_global_database tool.
+    - Always ask user to choose whether to use SDS data or not by showing product name, supplier name from the substance request compared to the SDS data.
+
+    RETURNS: Information of the successfully matched substance request
+    """
+
+    endpoint = f"{BACKEND_URL}/substance/{substance_request_id}/matchSdsRequest/"
+
+    if not session_id:
+        return {
+            "status": "error",
+            "error": "No active session found",
+            "instruction": "Please login first using the login tool with your access token"
+        }
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error",
+            "error": "Access token not found in session",
+            "instruction": "Session expired. Please login again using the login tool."
+        }
+
+    headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+
+    try:
+        response = requests.post(
+            endpoint,
+            headers=headers,
+            json={
+                "sds_id": sds_id,
+                "use_sds_data": use_sds_data
+            },
+            timeout=10
+        )
+
+        if response.status_code == 200:
+            return response.json()
+        elif response.status_code == 401:
+            redis_client.delete(f"sds_mcp:{session_id}")
+            return {
+                "status": "error",
+                "error": "Authentication expired",
+                "instruction": "Your session has expired. Please login again with your access token."
+            }
+        else:
+            try:
+                error_msg = response.json().get("error_message", None)
+                return {
+                    "status": "error",
+                    "error": error_msg if error_msg else response.text,
+                }
+            except:
+                return {
+                    "status": "error",
+                    "error": f"Failed to copy SDS to location with status {response.status_code}",
+                    "instruction": "Failed to copy SDS to location. Please verify the SDS and location."
+                }
+    except requests.exceptions.RequestException as e:
+        return {
+            "status": "error",
+            "error": f"Connection error: {str(e)}",
+            "instruction": "Failed to connect to copy service. Please try again."
+        }
+
+
 @mcp.tool(title="Update SDS data")
 async def edit_sds_data(
     session_id: str,
@@ -1352,13 +1536,13 @@ async def edit_sds_data(
 
     REQUIREMENTS:
         - User must be authenticated with the login tool before calling this function.
-        - `substance_id` should normally be obtained via the `search_customer_library` tool.
+        - `substance_id` should normally be obtained via the `search_substances_customer_library` tool.
         - If the user provides a `substance_id` directly, validate it first using
           the `retrieve_substance_detail` tool before proceeding.
 
     PARAMETERS:
         - `session_id` (str): Active session identifier.
-        - `substance_id` (str): Unique ID of the substance (validated via `search_customer_library`
+        - `substance_id` (str): Unique ID of the substance (validated via `search_substances_customer_library`
           or `retrieve_substance_detail`).
         - `sds_pdf_product_name` (str, optional): Product name shown in the SDS.
         - `chemical_name_synonyms` (str, optional): Synonyms of the chemical.
