@@ -77,9 +77,9 @@ async def login(access_token: str) -> Dict[str, Any]:
                 },
                 "session_id": session_id,
                 "next_action_suggestion": [
-                    "Search action: search_sds_global_database tool, search_substances_customer_library tool",
-                    "Location action: get_location tool, add_location tool, add_sds_to_location tool",
-                    "Substance action: move_sds_to_location tool, copy_sds_substance tool, archive_sds_substance tool, archive_sds_substance tool",
+                    "Search action: search_sds_global_database tool, search_customer_sds_library tool",
+                    "Location action: get_locations tool, add_location tool, add_sds_to_location tool",
+                    "Substance action: move_sds tool, copy_sds_to_another_location tool, archive_sds_substance tool, archive_sds_substance tool",
                     "User action: check_auth_status tool"
                 ],
             }
@@ -146,7 +146,7 @@ async def search_sds_global_database(
     REQUIRED: User must be authenticated using the login tool first.
     
     IMPORTANT GUIDELINES:
-    - If user ask to search without mentioning internally or globally, do search_sds_global_database tool and search_substances_customer_library tool.
+    - If user ask to search without mentioning internally or globally, do search_sds_global_database tool and search_customer_sds_library tool.
     - Do not perform broader search. If no results, only show suggestion for user to choose.
     - Display in a table for the response results with columns: "ID", "Product Name", "Product Code", "Manufacturer Name", "Revision Date", "Language", "Regulation Area", "Public Link", "Discovery Link".
     - Auto convert to language/region code if user input language/region name (e.g., "English" -> "en", "Europe" -> "eu", etc.).
@@ -292,15 +292,15 @@ async def show_sds_detail(session_id: str, sds_id: str) -> Dict[str, Any]:
         }
 
 
-@mcp.tool(title="Search substances from Customer Library")
-async def search_substances_customer_library(session_id: str, keyword: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+@mcp.tool(title="Search customer SDS library")
+async def search_customer_sds_library(session_id: str, keyword: str, page: int = 1, page_size: int = 10) -> Dict[str, Any]:
     """
     Search for substances (SDS assigned to a location) from customer's library/inventory.
 
     REQUIRED: User must be authenticated using the login tool first.
 
     IMPORTANT GUIDELINES:
-    - If user ask to search without mentioning internally or globally, do search_sds_global_database tool and search_substances_customer_library tool.
+    - If user ask to search without mentioning internally or globally, do search_sds_global_database tool and search_customer_sds_library tool.
     - Do not use ID as search keyword.
 
     Returns: List of substance information
@@ -378,8 +378,8 @@ async def search_substances_customer_library(session_id: str, keyword: str, page
         }
 
 
-@mcp.tool(title="Show substance details")
-async def show_substance_detail(session_id: str, substance_id: str) -> Dict[str, Any]:
+@mcp.tool(title="Show customer SDS detail")
+async def show_customer_sds_detail(session_id: str, substance_id: str) -> Dict[str, Any]:
     """
     Show detail information for a specific substance (SDS assigned to a location) in the customer's inventory.
 
@@ -387,7 +387,7 @@ async def show_substance_detail(session_id: str, substance_id: str) -> Dict[str,
 
     IMPORTANT GUIDELINES:
     - If not found any information of the substance, ask user to provide SDS name.
-    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
+    - When user input SDS name, call search_customer_sds_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substances found.
     - If seeing error message, display the error message to user.
 
@@ -461,7 +461,7 @@ async def show_substance_detail(session_id: str, substance_id: str) -> Dict[str,
 
 
 @mcp.tool(title="Add SDS")
-async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) -> Dict[str, Any]:
+async def add_sds(session_id: str, sds_id: str, location_id: str) -> Dict[str, Any]:
     """
     Add an SDS from the global database to a specific location.
 
@@ -470,7 +470,7 @@ async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) ->
     IMPORTANT GUIDELINES:
     - If not found any information of location, ask user to provide location name.
     - If not found any information of SDS, ask user to provide SDS name.
-    - When user input location name, call get_location tool to get all locations and filter with location name.
+    - When user input location name, call get_locations tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
     - When user input SDS name, call search_sds_global_database tool with keyword as SDS name.
     - Always ask user to choose which SDS if multiple SDS found.
@@ -536,7 +536,7 @@ async def add_sds_to_location(session_id: str, sds_id: str, location_id: str) ->
 
 
 @mcp.tool(title="Move SDS")
-async def move_sds_to_location(session_id: str, substance_id: str, location_id: str) -> Dict[str, Any]:
+async def move_sds(session_id: str, substance_id: str, location_id: str) -> Dict[str, Any]:
     """
     Move a substance (SDS assigned to a location) to a specific location.
     
@@ -545,9 +545,9 @@ async def move_sds_to_location(session_id: str, substance_id: str, location_id: 
     IMPORTANT GUIDELINES:
     - If not found any information of location, ask user to provide location name.
     - If not found any information of SDS, ask user to provide SDS name.
-    - When user input location name, call get_location tool to get all locations and filter with location name.
+    - When user input location name, call get_locations tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
-    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
+    - When user input SDS name, call search_customer_sds_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substance found.
     
     Return: Information of the moved substance
@@ -610,8 +610,8 @@ async def move_sds_to_location(session_id: str, substance_id: str, location_id: 
         }
 
 
-@mcp.tool(title="Copy SDS")
-async def copy_sds_substance(session_id: str, substance_id: str, location_id: str) -> Dict[str, Any]:
+@mcp.tool(title="Copy SDS to another location")
+async def copy_sds_to_another_location(session_id: str, substance_id: str, location_id: str) -> Dict[str, Any]:
     """
     Add the selected substance (SDS assigned to a location) to the target location/department with similar information.
 
@@ -620,9 +620,9 @@ async def copy_sds_substance(session_id: str, substance_id: str, location_id: st
     IMPORTANT GUIDELINES:
     - If not found any information of location, ask user to provide location name.
     - If not found any information of SDS, ask user to provide SDS name.
-    - When user input location name, call get_location tool to get all locations and filter with location name.
+    - When user input location name, call get_locations tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
-    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
+    - When user input SDS name, call search_customer_sds_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substance found.
 
     Return: Information of the added substance
@@ -686,7 +686,7 @@ async def copy_sds_substance(session_id: str, substance_id: str, location_id: st
 
 
 @mcp.tool(title="Archive SDS")
-async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str, Any]:
+async def archive_sds(session_id: str, substance_id: str) -> Dict[str, Any]:
     """
     Move a substance (SDS assigned to a location) to archive.
     Synonyms: delete substance, remove substance, etc.
@@ -695,7 +695,7 @@ async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str,
 
     IMPORTANT GUIDELINES:
     - If not found any information of SDS, ask user to provide SDS name.
-    - When user input SDS name, call search_substances_customer_library tool with keyword as SDS name.
+    - When user input SDS name, call search_customer_sds_library tool with keyword as SDS name.
     - Always ask user to choose which substance if multiple substance found.
 
     Return: Information of the archived substance
@@ -758,7 +758,7 @@ async def archive_sds_substance(session_id: str, substance_id: str) -> Dict[str,
 
 
 @mcp.tool(title="Get location structure")
-async def get_location(session_id: str) -> List[Dict[str, Any]]:
+async def get_locations(session_id: str) -> List[Dict[str, Any]]:
     """
     Get location tree list for the current user.
 
@@ -833,7 +833,7 @@ async def add_location(session_id: str, name: str, parent_department_id: Optiona
     - parent_department_id is None when creating root location.
     - When user not mentioning parent location, ask user to clarify whether it is root location or not.
     - If it is not root location, ask user to provide parent location.
-    - When user input location name, call get_location tool to get all locations and filter with location name.
+    - When user input location name, call get_locations tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
 
     RETURN: A dictionary of the newly added location
@@ -896,15 +896,15 @@ async def add_location(session_id: str, name: str, parent_department_id: Optiona
         }
 
 
-@mcp.tool(title="Get hazardous substances")
-async def get_sdss_with_ingredients(session_id: str, keyword: str = "", page: int = 1, page_size: int = 10) -> Dict[str, Any]:
+@mcp.tool(title="Get SDSs with ingredients on restricted lists")
+async def get_sdss_with_ingredients_on_restricted_lists(session_id: str, keyword: str = "", page: int = 1, page_size: int = 10) -> Dict[str, Any]:
     """
     Get or Search hazardous SDSs with detail information on ingredients/components that restricted on regulation list.
 
     REQUIRES: User must be authenticated using the login tool first.
 
     IMPORTANT GUIDELINES:
-    - If user not mentioning keyword, call get_sdss_with_ingredients tool with keyword as empty string.
+    - If user not mentioning keyword, call get_sdss_with_ingredients_on_restricted_lists tool with keyword as empty string.
     - When displaying response, show more detail on ingredients/components.
     """
 
@@ -983,8 +983,8 @@ async def get_sdss_with_ingredients(session_id: str, keyword: str = "", page: in
         }
 
 
-@mcp.tool(title="Upload SDS file")
-async def upload_sds_pdf_to_location(session_id: str, department_id: str):
+@mcp.tool(title="Add SDS by uploading SDS PDF file")
+async def add_sds_by_uploading_sds_pdf_file(session_id: str, department_id: str):
     """
     Upload SDS file to the specified location.
 
@@ -992,10 +992,10 @@ async def upload_sds_pdf_to_location(session_id: str, department_id: str):
     
     IMPORTANT GUIDELINES:
     - If not found any information of location, ask user to provide location name.
-    - When user input location name, call get_location tool to get all locations and filter with location name.
+    - When user input location name, call get_locations tool to get all locations and filter with location name.
     - Always ask user to choose which location if multiple locations found.
     - Ask user to clarify they have finished uploading the SDS file.
-    - If user confirm they have finished uploading the SDS file, call check_upload_sds_pdf_to_location_status tool with request_id to check the status of the upload process.
+    - If user confirm they have finished uploading the SDS file, call check_upload_sds_pdf_status tool with request_id to check the status of the upload process.
     """
     # Validate session
     info = redis_client.get(f"sds_mcp:{session_id}")
@@ -1016,23 +1016,23 @@ async def upload_sds_pdf_to_location(session_id: str, department_id: str):
         "instructions": [
             "1. Click or copy the upload_url link to access the upload form",
             "2. Select your PDF file using the file input and click 'Upload SDS File' to upload",
-            "3. After the file is uploaded, call check_upload_sds_pdf_to_location_status tool with request_id to check the status of the upload process"
+            "3. After the file is uploaded, call check_upload_sds_pdf_status tool with request_id to check the status of the upload process"
         ]
     }
     
 
 @mcp.tool(title="Check upload SDS file status")
-async def check_upload_sds_pdf_to_location_status(session_id: str, request_id: str) -> dict:
+async def check_upload_sds_pdf_status(session_id: str, request_id: str) -> dict:
     """
-    Check and notify the status for upload_sds_pdf_to_location tool.
+    Check and notify the status for add_sds_by_uploading_sds_pdf_file tool.
 
     REQUIRED: User must be authenticated using the login tool first.
 
     IMPORTANT GUIDELINES:
-    - This should only be called after upload_sds_pdf_to_location tool.
+    - This should only be called after add_sds_by_uploading_sds_pdf_file tool.
     - If not found request, ask user to provide request_id or follow the instruction to upload SDS file again.
     - If progress is 100, show information.
-    - If progress is not 100, show information for current progres and call upload_sds_pdf_to_location tool with request_id again.
+    - If progress is not 100, show information for current progres and call add_sds_by_uploading_sds_pdf_file tool with request_id again.
     """
 
     info = redis_client.get(f"sds_mcp:{session_id}")
@@ -1536,13 +1536,13 @@ async def edit_sds_data(
 
     REQUIREMENTS:
         - User must be authenticated with the login tool before calling this function.
-        - `substance_id` should normally be obtained via the `search_substances_customer_library` tool.
+        - `substance_id` should normally be obtained via the `search_customer_sds_library` tool.
         - If the user provides a `substance_id` directly, validate it first using
           the `retrieve_substance_detail` tool before proceeding.
 
     PARAMETERS:
         - `session_id` (str): Active session identifier.
-        - `substance_id` (str): Unique ID of the substance (validated via `search_substances_customer_library`
+        - `substance_id` (str): Unique ID of the substance (validated via `search_customer_sds_library`
           or `retrieve_substance_detail`).
         - `sds_pdf_product_name` (str, optional): Product name shown in the SDS.
         - `chemical_name_synonyms` (str, optional): Synonyms of the chemical.
