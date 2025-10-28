@@ -31,13 +31,70 @@ app = FastAPI(
 )
 
 # Mount search MCP
-app.mount("/search", search_mcp.streamable_http_app())
+app.mount("/support", search_mcp.streamable_http_app())
 
 
 @app.get("/")
 async def root():
     """Redirect to login page"""
     return {"message": "SDS Manager API", "login": "/auth/login"}
+
+
+@app.get("/login", response_class=HTMLResponse)
+async def login_form(request: Request, session_id: str):
+    """
+    Display login form for SDS Manager
+    
+    Query parameters:
+    - session_id: User session ID from login
+    """
+    
+    return templates.TemplateResponse("login.html", {
+        "request": request,
+        "session_id": session_id,
+    })
+
+
+@app.post("/login")
+async def login(
+    session_id: str = Form(...),
+    api_key: str = Form(...),
+):
+    """
+    Handle login form submission
+    """
+    try:
+        headers = {SDS_HEADER_NAME: f"{api_key}"}
+        response = requests.get(
+            f"{BACKEND_URL}/user/",
+            headers=headers,
+        )
+
+        if response.status_code == 200:
+            result = response.json()
+            redis_client.set(f"sds_mcp:{session_id}", {
+                "api_key": api_key,
+                "user_id": result.get("id"),
+                "email": result.get("email"),
+                "first_name": result.get("first_name", ""),
+                "last_name": result.get("last_name", ""),
+                "language": result.get("language"),
+                "country": result.get("country"),
+                "phone_number": result.get("phone_number"),
+                "customer": result.get("customer"),
+            })
+            return {
+                "status": "success", 
+                "message": f"Login successfully!",
+            }
+        else:
+            return {
+                "status": "error", 
+                "message": f"Login failed with status {response.status_code}",
+                "details": response.text
+            }
+    except Exception as e:
+        return {"status": "error", "message": f"Login error: {str(e)}"}
 
 
 @app.get("/upload", response_class=HTMLResponse)
@@ -90,7 +147,7 @@ async def upload_file(
         file_content = await file.read()
         
         # Upload to SDS Manager
-        headers = {SDS_HEADER_NAME: f"{info.get('access_token')}"}
+        headers = {SDS_HEADER_NAME: f"{info.get('api_key')}"}
         
         response = requests.post(
             f"{BACKEND_URL}/location/{department_id}/uploadSDS/",
