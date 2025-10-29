@@ -59,20 +59,28 @@ jobs:
 
           echo "environment=$environment" >> $GITHUB_OUTPUT
           echo "docker_tag=${{ env.DOCKER_REPO }}:sds_mcp.$environment.latest" >> $GITHUB_OUTPUT
-      
-      - name: Build and Push Docker Image
-        run: |
-          if [[ "${{ steps.set-env.outputs.environment }}" == "develop" || "${{ steps.set-env.outputs.environment }}" == "rc" ]]; then
-            docker build -t ${{ steps.set-env.outputs.docker_tag }} -f ./Dockerfile .
-            timeout 300 docker push ${{ steps.set-env.outputs.docker_tag }}
 
-          elif [[ "${{ steps.set-env.outputs.environment }}" == "prod" ]]; then
-            docker build -t ${{ steps.set-env.outputs.docker_tag }} -f ./Dockerfile .
-            timeout 300 docker push ${{ steps.set-env.outputs.docker_tag }}
-
-            docker build -t ${{ steps.set-env.outputs.docker_tag_version }} -f ./Dockerfile .
-            timeout 300 docker push ${{ steps.set-env.outputs.docker_tag_version }}
-          fi
+      - name: Build and push develop/rc
+        if: (steps.set-env.outputs.environment == 'develop' || steps.set-env.outputs.environment == 'rc') && github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ${{ steps.set-env.outputs.docker_tag }}
+          context: .
+          file: ./Dockerfile
+          cache-from: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache
+          cache-to: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache,mode=max
+  
+      - name: Build and push for prod
+        if: steps.set-env.outputs.environment == 'prod' && github.event_name == 'push'
+        uses: docker/build-push-action@v6
+        with:
+          push: true
+          tags: ${{ steps.set-env.outputs.docker_tag }},${{ steps.set-env.outputs.docker_tag_version }}
+          context: .
+          file: ./Dockerfile
+          cache-from: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache
+          cache-to: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache,mode=max
           
       - name: Release new version
         uses: appleboy/ssh-action@v1.2.1
