@@ -15,3 +15,5 @@ SECRET_KEY = os.getenv("SECRET_KEY")
 
 BACKEND_URL = os.getenv("BACKEND_URL", "http://localhost:8000/mcp")
 SDS_HEADER_NAME = os.getenv("SDS_HEADER_NAME", "X-MCP-API-KEY")
+
+DOMAIN = os.getenv("DOMAIN", "http://localhost:10000")
