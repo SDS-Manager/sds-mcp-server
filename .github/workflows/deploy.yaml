@@ -44,6 +44,7 @@ jobs:
       - name: Determine Environment
         id: set-env
         run: |
+          TAG_NAME="latest"
           if [[ "${GITHUB_REF}" == "refs/heads/develop" ]]; then
             export environment=staging
           elif [[ "${GITHUB_REF}" == "refs/heads/rc" ]]; then
@@ -51,14 +52,12 @@ jobs:
           elif [[ "${GITHUB_REF}" == refs/tags/prod-v* ]]; then
             TAG_NAME=${GITHUB_REF#refs/tags/}
             export environment=prod
-            echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-            echo "docker_tag_version=${{ env.DOCKER_REPO }}:sds_mcp.${TAG_NAME}" >> $GITHUB_OUTPUT
           else
             export environment=test
           fi
 
           echo "environment=$environment" >> $GITHUB_OUTPUT
-          echo "docker_tag=${{ env.DOCKER_REPO }}:sds_mcp.$environment.latest" >> $GITHUB_OUTPUT
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
 
       - name: Build and push staging/rc
         if: (steps.set-env.outputs.environment == 'staging' || steps.set-env.outputs.environment == 'rc') && github.event_name == 'push'
@@ -70,19 +69,21 @@ jobs:
             ${{ env.DOCKER_REPO }}:${{steps.set-env.outputs.environment}}.${{ github.sha }}
           context: .
           file: ./Dockerfile
-          cache-from: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache
-          cache-to: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.DOCKER_REPO }}:${{steps.set-env.outputs.environment}}.latest-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_REPO }}:${{steps.set-env.outputs.environment}}.latest-buildcache,mode=max
   
       - name: Build and push for prod
         if: steps.set-env.outputs.environment == 'prod' && github.event_name == 'push'
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ${{ steps.set-env.outputs.docker_tag }},${{ steps.set-env.outputs.docker_tag_version }}
+          tags: |
+            ${{ env.DOCKER_REPO }}:latest
+            ${{ env.DOCKER_REPO }}:${{ steps.set-env.outputs.tag_name }}
           context: .
           file: ./Dockerfile
-          cache-from: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache
-          cache-to: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.DOCKER_REPO }}:latest-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_REPO }}:latest-buildcache,mode=max
           
       - name: Update SDS Kit repository
         uses: actions/github-script@v7
@@ -90,6 +91,7 @@ jobs:
           ENVIRONMENT: ${{ steps.set-env.outputs.environment }}
           SHA: ${{ github.sha }}
           SDS_REPO: ${{ env.DOCKER_REPO }}
+          TAG_NAME: ${{ steps.set-env.outputs.tag_name }}
         with:
           github-token: ${{ secrets.GHCR_PASSWORD }}
           script: |
@@ -116,7 +118,9 @@ jobs:
             const repoImage = process.env.SDS_REPO;
             const escapedRepoImage = repoImage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
             core.info(`Using escapedRepoImage: ${escapedRepoImage}`);
-            const newTag = `${process.env.ENVIRONMENT}.${process.env.SHA}`;
+            const newTag = process.env.ENVIRONMENT === 'prod' 
+              ? process.env.TAG_NAME 
+              : `${process.env.ENVIRONMENT}.${process.env.SHA}`;
             
             const pattern = new RegExp(
               `(image:\\s*)${escapedRepoImage}:[^"\\s']+`,
