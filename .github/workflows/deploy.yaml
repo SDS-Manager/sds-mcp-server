@@ -9,7 +9,7 @@ on:
       - "prod-v*"
 
 env:
-  DOCKER_REPO: "ghcr.io/sds-manager/sds"
+  DOCKER_REPO: "ghcr.io/sds-manager/sds-mcp-server"
   SSH_HOST: ${{ secrets.SSH_HOST }}
   SSH_USER: ${{ secrets.SSH_USER }}
   SSH_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
@@ -44,55 +44,144 @@ jobs:
       - name: Determine Environment
         id: set-env
         run: |
+          TAG_NAME="latest"
           if [[ "${GITHUB_REF}" == "refs/heads/develop" ]]; then
-            export environment=develop
+            export environment=staging
           elif [[ "${GITHUB_REF}" == "refs/heads/rc" ]]; then
             export environment=rc
           elif [[ "${GITHUB_REF}" == refs/tags/prod-v* ]]; then
             TAG_NAME=${GITHUB_REF#refs/tags/}
             export environment=prod
-            echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
-            echo "docker_tag_version=${{ env.DOCKER_REPO }}:sds_mcp.${TAG_NAME}" >> $GITHUB_OUTPUT
           else
             export environment=test
           fi
 
           echo "environment=$environment" >> $GITHUB_OUTPUT
-          echo "docker_tag=${{ env.DOCKER_REPO }}:sds_mcp.$environment.latest" >> $GITHUB_OUTPUT
+          echo "tag_name=${TAG_NAME}" >> $GITHUB_OUTPUT
 
-      - name: Build and push develop/rc
-        if: (steps.set-env.outputs.environment == 'develop' || steps.set-env.outputs.environment == 'rc') && github.event_name == 'push'
+      - name: Build and push staging/rc
+        if: (steps.set-env.outputs.environment == 'staging' || steps.set-env.outputs.environment == 'rc') && github.event_name == 'push'
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ${{ steps.set-env.outputs.docker_tag }}
+          tags: |
+            ${{ env.DOCKER_REPO }}:${{steps.set-env.outputs.environment}}.latest
+            ${{ env.DOCKER_REPO }}:${{steps.set-env.outputs.environment}}.${{ github.sha }}
           context: .
           file: ./Dockerfile
-          cache-from: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache
-          cache-to: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.DOCKER_REPO }}:${{steps.set-env.outputs.environment}}.latest-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_REPO }}:${{steps.set-env.outputs.environment}}.latest-buildcache,mode=max
   
       - name: Build and push for prod
         if: steps.set-env.outputs.environment == 'prod' && github.event_name == 'push'
         uses: docker/build-push-action@v6
         with:
           push: true
-          tags: ${{ steps.set-env.outputs.docker_tag }},${{ steps.set-env.outputs.docker_tag_version }}
+          tags: |
+            ${{ env.DOCKER_REPO }}:latest
+            ${{ env.DOCKER_REPO }}:${{ steps.set-env.outputs.tag_name }}
           context: .
           file: ./Dockerfile
-          cache-from: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache
-          cache-to: type=registry,ref=${{ steps.set-env.outputs.docker_tag }}-buildcache,mode=max
+          cache-from: type=registry,ref=${{ env.DOCKER_REPO }}:latest-buildcache
+          cache-to: type=registry,ref=${{ env.DOCKER_REPO }}:latest-buildcache,mode=max
           
-      - name: Release new version
-        uses: appleboy/ssh-action@v1.2.1
+      - name: Update SDS Kit repository
+        uses: actions/github-script@v7
+        env:
+          ENVIRONMENT: ${{ steps.set-env.outputs.environment }}
+          SHA: ${{ github.sha }}
+          SDS_REPO: ${{ env.DOCKER_REPO }}
+          TAG_NAME: ${{ steps.set-env.outputs.tag_name }}
         with:
-          host: ${{ env.SSH_HOST }}
-          username: ${{ env.SSH_USER }}
-          key: ${{ env.SSH_KEY }}
-          envs: SUDO_PWD
+          github-token: ${{ secrets.GHCR_PASSWORD }}
           script: |
-            echo "Releasing to ${{ steps.set-env.outputs.environment }}..."
-            if [[ "${{ steps.set-env.outputs.environment }}" == "staging" ]]; then
-              echo "$SUDO_PWD" | sudo -S sh /sds/toolkit/sds/k8s/sds_staging/sds_mcp/sds_mcp.sh staging $SUDO_PWD
-            elif [[ "${{ steps.set-env.outputs.environment }}" == "rc" ]]; then
-              echo $SUDO_PWD | sudo -S sh /sds/toolkit/sds/k8s/sds_rc/sds_mcp/sds_mcp.sh rc $SUDO_PWD
-            fi
+            const owner = "sds-manager";
+            const repo = "sds-kit";
+            const ownerRepo = `${owner}/${repo}`;
+            const branch = "main";
+            const sds_service = "sds_mcp";
+            const path = `sds/k8s/sds_${process.env.ENVIRONMENT}/${sds_service}/deploy.yaml`;
+
+            core.info(`Starting update for ${sds_service} in ${process.env.ENVIRONMENT} environment`);
+            core.info(`Target repository: ${ownerRepo}`);
+            core.info(`Target file: ${path}`);
+
+            // 1) Read current file (to modify its contents)
+            core.info(`Reading current deployment file from ${branch} branch...`);
+            const res = await github.request("GET /repos/{owner}/{repo}/contents/{path}", {
+              owner, repo, path, ref: branch,
+              headers: { accept: "application/vnd.github.raw+json" }
+            });
+            core.info("✓ Successfully retrieved deployment file");
+            
+            const content = Buffer.from(res.data.content ? Buffer.from(res.data.content, "base64").toString("utf8") : res.data, "utf8").toString();
+            const repoImage = process.env.SDS_REPO;
+            const escapedRepoImage = repoImage.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            core.info(`Using escapedRepoImage: ${escapedRepoImage}`);
+            const newTag = process.env.ENVIRONMENT === 'prod' 
+              ? process.env.TAG_NAME 
+              : `${process.env.ENVIRONMENT}.${process.env.SHA}`;
+            
+            const pattern = new RegExp(
+              `(image:\\s*)${escapedRepoImage}:[^"\\s']+`,
+              "g"
+            );
+
+            core.info(`Updating image tag to: ${repoImage}:${newTag}`);
+
+            const updated = content.replace(
+              pattern,
+              `$1${repoImage}:${newTag}`
+            );
+            
+            if (updated === content) {
+              core.info("⚠ No changes detected in deployment file - image tag already up to date");
+              return;
+            }
+            core.info("✓ Image tag updated in deployment file");
+
+            // 2) Get the current branch HEAD OID
+            core.info(`Fetching current HEAD OID for ${branch} branch...`);
+            const branchRef = await github.rest.repos.getBranch({
+              owner,
+              repo,
+              branch,
+            });
+            const expectedHeadOid = branchRef.data.commit.sha;
+            core.info(`✓ Current HEAD OID: ${expectedHeadOid}`);
+
+            // 3) Create a commit on branch with fileChanges
+            core.info("Creating commit with updated deployment file...");
+            const mutation = `
+            mutation($branch: String!, $message: String!, $path: String!, $content: Base64String!, $expectedHeadOid: GitObjectID!) {
+              createCommitOnBranch(input:{
+                branch: { repositoryNameWithOwner: "${ownerRepo}", branchName: $branch },
+                message: { headline: $message },
+                expectedHeadOid: $expectedHeadOid,
+                fileChanges: { additions: [{ path: $path, contents: $content }] }
+              }) { commit { oid, url } }
+            }`;
+
+            const commitMessage = `${sds_service}: update image to ${newTag}`;
+            core.info(`Commit message: "${commitMessage}"`);
+            
+            const result = await github.graphql(mutation, {
+              branch,
+              message: commitMessage,
+              path,
+              content: Buffer.from(updated, "utf8").toString("base64"),
+              expectedHeadOid,
+            });
+            
+            core.info("✓ Successfully committed changes to sds-kit repository");
+            
+            // The response structure from GraphQL
+            if (result?.createCommitOnBranch?.commit) {
+              core.info(`Commit OID: ${result.createCommitOnBranch.commit.oid}`);
+              core.info(`Commit URL: ${result.createCommitOnBranch.commit.url}`);
+            } else {
+              core.info("Commit created successfully (response structure unexpected)");
+              core.info(`Response: ${JSON.stringify(result, null, 2)}`);
+            }
+            
+            core.info("🚀 Deployment file update completed successfully!");
