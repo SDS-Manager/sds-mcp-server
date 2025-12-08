@@ -2,6 +2,13 @@ from typing import List, Optional, Dict, Any
 from pydantic import BaseModel, Field
 
 
+class LimitsResponse(BaseModel):
+    chat_agent_search_limit: int = Field(serialization_alias="global_search_sds_limit")
+    chat_agent_get_sds_limit: int = Field(serialization_alias="show_sds_detail_limit")
+    chat_agent_search_count: int = Field(serialization_alias="global_search_sds_used")
+    chat_agent_get_sds_count: int = Field(serialization_alias="show_sds_detail_used")
+
+
 class PaginatedResponse(BaseModel):
     count: int
     next: Optional[str] = None
