@@ -127,6 +127,14 @@
         .columns-table .optional {
             color: #6c757d;
         }
+        .error-container {
+            margin-top: 20px;
+            padding: 15px;
+            border-radius: 5px;
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
     </style>
 </head>
 <body>
@@ -136,34 +144,48 @@
             <p>Upload your Excel file with product information</p>
         </div>
 
-        <div class="info-box">
-            <strong>📋 Upload Information:</strong><br>
-            • Session ID: {{ session_id[:8] }}...<br>
-            • Request ID: {{ request_id }}<br>
-            • Accepted formats: .xlsx, .xls files only<br>
-            • Maximum file size: 10MB
-        </div>
-
-
-        <form id="uploadForm" enctype="multipart/form-data">
-            <input type="hidden" name="session_id" value="{{ session_id }}">
-            <input type="hidden" name="request_id" value="{{ request_id }}">
-            
-            <div class="form-group">
-                <label for="file">📄 Select Excel Product List File:</label>
-                <input type="file" id="file" name="file" accept=".xlsx,.xls" required>
+        {% if session_id and request_id %}
+            <div class="info-box">
+                <strong>📋 Upload Information:</strong><br>
+                • Session ID: {{ session_id[:8] }}...<br>
+                • Request ID: {{ request_id }}<br>
+                • Accepted formats: .xlsx, .xls files only<br>
+                • Maximum file size: 10MB
             </div>
 
-            <button type="submit" class="upload-btn" id="uploadBtn">
-                📤 Upload Product List
-            </button>
 
-            <div class="progress" id="progress">
-                <div class="progress-bar" id="progressBar"></div>
+            <form id="uploadForm" enctype="multipart/form-data">
+                <input type="hidden" name="session_id" value="{{ session_id }}">
+                <input type="hidden" name="request_id" value="{{ request_id }}">
+                
+                <div class="form-group">
+                    <label for="file">📄 Select Excel Product List File:</label>
+                    <input type="file" id="file" name="file" accept=".xlsx,.xls" required>
+                </div>
+
+                <button type="submit" class="upload-btn" id="uploadBtn">
+                    📤 Upload Product List
+                </button>
+
+                <div class="progress" id="progress">
+                    <div class="progress-bar" id="progressBar"></div>
+                </div>
+            </form>
+
+            <div class="result" id="result"></div>
+        {% elif session_id %}
+            <div class="error-container">
+                <strong>Upload session expired!</strong><br>
+                Please get new upload URL from the Chat Agent and upload again.
             </div>
-        </form>
+        {% else %}
+            <div class="error-container">
+                <strong>Session expired!</strong><br>
+                Please get new login URL from the Chat Agent and login again.
+            </div>
+        {% endif %}
 
-        <div class="result" id="result"></div>
+        
     </div>
 
     <script>

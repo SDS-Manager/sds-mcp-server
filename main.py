@@ -4,7 +4,8 @@ from fastapi import FastAPI, File, UploadFile, Form, Request
 from fastapi.responses import HTMLResponse
 from fastapi.templating import Jinja2Templates
 import requests
-from search import mcp as search_mcp
+from typing import Optional
+from tools import mcp as tools_mcp
 from config import PORT, BACKEND_URL, SDS_HEADER_NAME
 from cache import redis_client
 import pandas as pd
@@ -19,7 +20,7 @@ templates = Jinja2Templates(directory="templates")
 @contextlib.asynccontextmanager
 async def lifespan(app: FastAPI):
     async with contextlib.AsyncExitStack() as stack:
-        await stack.enter_async_context(search_mcp.session_manager.run())
+        await stack.enter_async_context(tools_mcp.session_manager.run())
         yield
 
 
@@ -30,8 +31,8 @@ app = FastAPI(
     lifespan=lifespan
 )
 
-# Mount search MCP
-app.mount("/support", search_mcp.streamable_http_app())
+# Mount tools MCP
+app.mount("/support", tools_mcp.streamable_http_app())
 
 
 @app.get("/")
@@ -41,7 +42,7 @@ async def root():
 
 
 @app.get("/login", response_class=HTMLResponse)
-async def login_form(request: Request, session_id: str):
+async def login_form(request: Request, session_id: Optional[str] = None):
     """
     Display login form for SDS Manager
     
@@ -49,6 +50,21 @@ async def login_form(request: Request, session_id: str):
     - session_id: User session ID from login
     """
     
+    if not session_id:
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "session_id": None,
+            "session_not_found": True,
+        })
+
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return templates.TemplateResponse("login.html", {
+            "request": request,
+            "session_id": None,
+            "session_expired": True,
+        })
+
     return templates.TemplateResponse("login.html", {
         "request": request,
         "session_id": session_id,
@@ -73,6 +89,7 @@ async def login(
         if response.status_code == 200:
             result = response.json()
             redis_client.set(f"sds_mcp:{session_id}", {
+                "logged_in": True,
                 "api_key": api_key,
                 "user_id": result.get("id"),
                 "email": result.get("email"),
@@ -88,17 +105,28 @@ async def login(
                 "message": f"Login successfully!",
             }
         else:
+            redis_client.set(f"sds_mcp:{session_id}", {
+                "logged_in": False,
+                "login_error": True,
+                "error_message": response.text,
+            })
+            error_data = response.json()
             return {
                 "status": "error", 
-                "message": f"Login failed with status {response.status_code}",
-                "details": response.text
+                "error_code": 400,
+                "message": error_data.get("error_message") or response.text
             }
     except Exception as e:
         return {"status": "error", "message": f"Login error: {str(e)}"}
 
 
 @app.get("/upload", response_class=HTMLResponse)
-async def upload_form(request: Request, session_id: str, department_id: str, request_id: str):
+async def upload_form(
+    request: Request, 
+    session_id: str, 
+    department_id: str, 
+    request_id: str
+):
     """
     Display file upload form for SDS files
     
@@ -109,16 +137,23 @@ async def upload_form(request: Request, session_id: str, department_id: str, req
     # Validate session
     info = redis_client.get(f"sds_mcp:{session_id}")
     if not info:
-        return HTMLResponse(
-            content="<h1>Session Expired</h1><p>Please login again to upload files.</p>",
-            status_code=401
-        )
+        return templates.TemplateResponse("upload.html", {
+            "request": request,
+            "session_id": None,
+        })
+
+    upload_info = redis_client.get(f"upload_sds_pdf:{session_id}:{request_id}")
+    if not upload_info:
+        return templates.TemplateResponse("upload.html", {
+            "request": request,
+            "session_id": session_id,
+            "request_id": None,
+        })
     
     return templates.TemplateResponse("upload.html", {
         "request": request,
         "session_id": session_id,
         "department_id": department_id,
-        "user_name": info.get("name", "User"),
         "request_id": request_id
     })
 
@@ -136,8 +171,18 @@ async def upload_file(
     # Validate session
     info = redis_client.get(f"sds_mcp:{session_id}")
     if not info:
-        return {"status": "error", "message": "Session expired. Please login again."}
+        return {
+            "status": "error", 
+            "message": "Session expired. Please get new login URL from the Chat Agent and login again."
+        }
     
+    upload_info = redis_client.get(f"upload_sds_pdf:{session_id}:{request_id}")
+    if not upload_info:
+        return {
+            "status": "error", 
+            "message": "Upload session expired. Please get new upload URL from the Chat Agent and upload again."
+        }
+
     # Validate file type
     if not file.filename.lower().endswith('.pdf'):
         return {"status": "error", "message": "Only PDF files are allowed."}
@@ -158,12 +203,31 @@ async def upload_file(
 
         if response.status_code == 200:
             result = response.json()
+            redis_client.set(f"upload_sds_pdf:{session_id}:{request_id}", {
+                "session_id": session_id,
+                "request_id": request_id,
+                "location_id": department_id,
+                "status": "uploaded",
+                "file": file.filename,
+                "data": result,
+            })
+
             return {
                 "status": "success", 
                 "message": f"Successfully uploaded {file.filename} to location {department_id}",
                 "data": result
             }
         else:
+            redis_client.set(f"upload_sds_pdf:{session_id}:{request_id}", {
+                "session_id": session_id,
+                "request_id": request_id,
+                "location_id": department_id,
+                "status": "error",
+                "status_code": response.status_code,
+                "error_message": response.text,
+                "file": file.filename,
+            })
+
             return {
                 "status": "error", 
                 "message": f"Upload failed with status {response.status_code}",
@@ -178,6 +242,22 @@ async def upload_product_list_form(request: Request, session_id: str, request_id
     """
     Display file upload form for product list
     """
+    # Validate session
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return templates.TemplateResponse("upload_product_list.html", {
+            "request": request,
+            "session_id": None,
+        })
+
+    upload_info = redis_client.get(f"upload_product_list:{session_id}:{request_id}")
+    if not upload_info:
+        return templates.TemplateResponse("upload_product_list.html", {
+            "request": request,
+            "session_id": session_id,
+            "request_id": None,
+        })
+
     return templates.TemplateResponse("upload_product_list.html", {
         "request": request,
         "session_id": session_id,
@@ -194,6 +274,22 @@ async def upload_product_list(
     """
     Handle product list upload
     """
+    # Validate session
+    info = redis_client.get(f"sds_mcp:{session_id}")
+    if not info:
+        return {
+            "status": "error", 
+            "message": "Session expired. Please get new login URL from the Chat Agent and login again."
+        }
+    
+    upload_key = f"upload_product_list:{session_id}:{request_id}"
+    upload_info = redis_client.get(upload_key)
+    if not upload_info:
+        return {
+            "status": "error", 
+            "message": "Upload session expired. Please get new upload URL from the Chat Agent and upload again."
+        }
+
     file_name = file.filename
     tmpdirname = f"tmp/{request_id}"
     if not os.path.exists(tmpdirname):
@@ -216,15 +312,16 @@ async def upload_product_list(
             extracted_columns.append(item.lower())
         
         # Set processing status
-        key = f"upload_product_list:{session_id}:{request_id}"
         record = {
-            "status": "extracted",
+            "status": "uploaded",
+            "session_id": session_id,
+            "request_id": request_id,
             "extracted_columns": extracted_columns,
             "total_row": total_data,
             "file_name": file_name,
             "file_path": tmp_file_path,
         }
-        redis_client.set(key, record)
+        redis_client.set(upload_key, record)
         
         return {
             "status": "success",
@@ -232,9 +329,18 @@ async def upload_product_list(
             "filename": file.filename,
         }
     except Exception as e:
+        error_message = f"Error processing product list: {str(e)}"
+        redis_client.set(upload_key, {
+            "status": "error",
+            "session_id": session_id,
+            "request_id": request_id,
+            "file_name": file_name,
+            "file_path": tmp_file_path,
+            "error_message": error_message,
+        })
         return {
             "status": "error",
-            "message": f"Error processing product list: {str(e)}"
+            "message": error_message
         }
 
 
