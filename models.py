@@ -1,5 +1,19 @@
-from typing import List, Optional, Dict, Any
+from typing import List, Optional, Dict, Any, Literal
 from pydantic import BaseModel, Field
+
+
+class LimitsResponse(BaseModel):
+    chat_agent_search_limit: int = Field(serialization_alias="global_search_sds_limit")
+    chat_agent_get_sds_limit: int = Field(serialization_alias="show_sds_detail_limit")
+    chat_agent_search_count: int = Field(serialization_alias="global_search_sds_used")
+    chat_agent_get_sds_count: int = Field(serialization_alias="show_sds_detail_used")
+
+
+class StatisticsResponse(BaseModel):
+    products_count: int
+    request_count: int
+    sds_count: int
+    locations_count: int
 
 
 class PaginatedResponse(BaseModel):
@@ -27,6 +41,33 @@ class GlobalSdsSearch(BaseModel):
 
 class SearchGlobalDatabaseResponse(PaginatedResponse):
     results: List[GlobalSdsSearch] = Field(default_factory=list)
+
+
+class ImportProductListResponse(BaseModel):
+    id: int
+    name: str
+    wish_list_file: str = Field(serialization_alias="file")
+    uploaded_by: Optional[Dict[str, Any]] = Field(default_factory=dict, alias="uploaded_by")
+
+
+class GetImportProductListResponse(PaginatedResponse):
+    results: List[ImportProductListResponse] = Field(default_factory=list)
+
+
+class ProductListSummaryResponse(BaseModel):
+    id: int
+    product_name: str
+    supplier_name: Optional[str] = None
+    department: Optional[Dict[str, Any]] = Field(default_factory=dict, alias="department")
+    language: Optional[Dict[str, Any]] = Field(default_factory=dict, alias="language")
+    linked_sds: Optional[Dict[str, Any]] = Field(default_factory=dict, alias="linked_sds")
+    external_system_id: Optional[str] = None
+    matched: Optional[bool] = None
+    is_deleted: Optional[bool] = None
+
+
+class GetProductListSummaryResponse(PaginatedResponse):
+    results: List[ProductListSummaryResponse] = Field(default_factory=list)
 
 
 class Location(BaseModel):
@@ -262,3 +303,18 @@ class GetExtractionStatusApiResponse(BaseModel):
         default_factory=dict,
         serialization_alias="imported_info"
     )
+
+
+class ActivityLog(BaseModel):
+    model_config = {"extra": "ignore"}
+    
+    type: Literal["product_log", "location_log"]
+    created_date: str
+    updated_by: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    product_info: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    location_info: Optional[Dict[str, Any]] = Field(default_factory=dict)
+    log: Optional[Dict[str, Any]] = Field(default_factory=dict)
+
+
+class ActivityLogResponse(PaginatedResponse):
+    results: List[ActivityLog] = Field(default_factory=list)
