@@ -8,8 +8,10 @@ from typing import Optional
 from tools import mcp as tools_mcp
 from config import PORT, BACKEND_URL, SDS_HEADER_NAME
 from cache import redis_client
+from utils import bootstrap_session_from_api_key
 import pandas as pd
 import tempfile
+import uuid
 
 # Create templates directory
 templates = Jinja2Templates(directory="templates")
@@ -80,44 +82,19 @@ async def login(
     Handle login form submission
     """
     try:
-        headers = {SDS_HEADER_NAME: f"{api_key}"}
-        response = requests.get(
-            f"{BACKEND_URL}/user/",
-            headers=headers,
-        )
+        session_uuid = uuid.UUID(session_id)
+    except ValueError:
+        return {"status": "error", "message": "Invalid session id"}
 
-        if response.status_code == 200:
-            result = response.json()
-            redis_client.set(f"sds_mcp:{session_id}", {
-                "logged_in": True,
-                "api_key": api_key,
-                "user_id": result.get("id"),
-                "email": result.get("email"),
-                "first_name": result.get("first_name", ""),
-                "last_name": result.get("last_name", ""),
-                "language": result.get("language"),
-                "country": result.get("country"),
-                "phone_number": result.get("phone_number"),
-                "customer": result.get("customer"),
-            })
-            return {
-                "status": "success", 
-                "message": f"Login successfully!",
-            }
-        else:
-            redis_client.set(f"sds_mcp:{session_id}", {
-                "logged_in": False,
-                "login_error": True,
-                "error_message": response.text,
-            })
-            error_data = response.json()
-            return {
-                "status": "error", 
-                "error_code": 400,
-                "message": error_data.get("error_message") or response.text
-            }
-    except Exception as e:
-        return {"status": "error", "message": f"Login error: {str(e)}"}
+    info, _, error_message = bootstrap_session_from_api_key(api_key, session_uuid)
+    if info:
+        return {"status": "success", "message": "Login successfully!"}
+
+    return {
+        "status": "error",
+        "error_code": 400,
+        "message": error_message or "Login failed",
+    }
 
 
 @app.get("/upload", response_class=HTMLResponse)

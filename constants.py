@@ -73,7 +73,11 @@ UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS = [
 ]
 
 SESSION_HANDLE_PARAM_DESCRIPTION = """
-- session_handle (UUID): Session UUID from get_login_url tool
+- session_handle (Optional[UUID]): Session UUID from get_login_url tool. Optional when the client supplies an x-api-key HTTP header.
+"""
+
+ALREADY_AUTHENTICATED = """
+- Client is authenticated: Either session existed OR the MCP client supplies an x-api-key header
 """
 
 PAGINATION_PARAM_DESCRIPTION = """
@@ -90,11 +94,13 @@ DEFAULT_RETURN_TEMPLATE = """
 - code (str): Status code
 - data (Optional[dict]): Data returned by the tool
 - instruction (list): User-friendly guidance(s)
-- trace_id (str): Trace ID for the request
+- session_handle (str): Current session ID
 """
 
 AUTHORIZED_PREREQUISITES = """
-- Must have session_handle from get_login_url tool
+- Must be authenticated via at least one of:
+    - session_handle from get_login_url tool, OR
+    - x-api-key HTTP header supplied by the MCP client
 """
 
 SDS_ID_REQUIRED_GUIDELINES = """
