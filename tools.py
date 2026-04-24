@@ -1,4 +1,4 @@
-from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp import FastMCP, Context
 from cache import redis_client
 from typing import Dict, Any, List, Optional, Literal
 import logging
@@ -31,6 +31,7 @@ from constants import (
     PAGINATION_PARAM_DESCRIPTION,
     PRODUCT_LIST_ID_REQUIRED_GUIDELINES,
     PRODUCT_LIST_NAME_TO_PRODUCT_LIST_ID_GUIDELINES,
+    ALREADY_AUTHENTICATED,
 )
 from models import (
     SubstanceDetail,
@@ -45,15 +46,28 @@ from models import (
     ActivityLogResponse,
 )
 from utils import (
-    handle_api_error, 
-    validate_session, 
+    handle_api_error,
+    validate_session,
     reset_upload_session,
     connection_error_response,
     server_error_response,
+    bootstrap_session_from_api_key,
 )
 
 
 logger = logging.getLogger(__name__)
+
+
+def _extract_api_key(ctx: Optional[Context]) -> Optional[str]:
+    if ctx is None:
+        return None
+    try:
+        request = ctx.request_context.request
+    except (AttributeError, LookupError):
+        return None
+    if request is None:
+        return None
+    return request.headers.get("x-api-key")
 
 # Initialize MCP server with proper description
 mcp = FastMCP(
@@ -77,7 +91,10 @@ def get_mcp_overview() -> str:
 
 
 @mcp.tool()
-async def get_login_url(session_handle: Optional[uuid.UUID]) -> Dict[str, Any]:
+async def get_login_url(
+    ctx: Context,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     To login to SDS Manager, you need to get session ID and login URL first.
     This tool initialize session ID (If not provided) & generate an login URL for user to login with their API key.
@@ -89,6 +106,7 @@ async def get_login_url(session_handle: Optional[uuid.UUID]) -> Dict[str, Any]:
 
     When not to call:
         - User has already logged in (Have session_handle from any previous tool)
+        - MCP client is already sending an x-api-key HTTP header (the server auto-authenticates — no browser login needed)
 
     Usage example (One-line):
         - I need to login to SDS Manager
@@ -96,7 +114,7 @@ async def get_login_url(session_handle: Optional[uuid.UUID]) -> Dict[str, Any]:
         - How can I access to SDS Manager
 
     Parameters:
-        - session_handle (Optional[UUID]): Session UUID from the previous tool. None for new session.
+        - session_handle (Optional[UUID]): Session UUID from the previous tool. Omit or pass nil UUID (00000000-0000-0000-0000-000000000000) for a new session.
 
     Prerequisites:
         - Must call get_mcp_overview tool at the beginning of the conversation
@@ -114,7 +132,24 @@ async def get_login_url(session_handle: Optional[uuid.UUID]) -> Dict[str, Any]:
         "3. After user confirm finished login, call check_auth_status with session_handle"
     ]
 
-    if session_handle:
+    x_api_key = _extract_api_key(ctx)
+    if x_api_key:
+        info, handle, _ = bootstrap_session_from_api_key(x_api_key, session_handle)
+        if info:
+            return {
+                "status": "success",
+                "code": "SESSION_REUSED",
+                "data": {
+                    "session_handle": handle,
+                    "message": "Authenticated via x-api-key header. No browser login required.",
+                },
+                "instruction": [
+                    "Pass session_handle to subsequent tools. Browser login is not required."
+                ],
+                "session_handle": handle,
+            }
+
+    if session_handle and session_handle != uuid.UUID(int=0):
         info = redis_client.get(f"sds_mcp:{session_handle}")
         if info:
             if info.get("logged_in"):
@@ -128,7 +163,7 @@ async def get_login_url(session_handle: Optional[uuid.UUID]) -> Dict[str, Any]:
                     "instruction": [
                         "Show message to user and call check_auth_status with session_handle"
                     ],
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
             else:
                 return {
@@ -140,7 +175,7 @@ async def get_login_url(session_handle: Optional[uuid.UUID]) -> Dict[str, Any]:
                         "login_url": f"{DOMAIN}/login?session_id={session_handle}",
                     },
                     "instruction": login_instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
 
     new_session_handle = str(uuid.uuid4())
@@ -157,17 +192,20 @@ async def get_login_url(session_handle: Optional[uuid.UUID]) -> Dict[str, Any]:
             "login_url": f"{DOMAIN}/login?session_id={new_session_handle}",
         },
         "instruction": login_instruction,
-        "trace_id": new_session_handle,
+        "session_handle": new_session_handle,
     }
 
 
 @mcp.tool()
-async def check_auth_status(session_handle: uuid.UUID) -> Dict[str, Any]:
+async def check_auth_status(
+    ctx: Context,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     Check if the current session is authenticated.
 
     When to call:
-        - User has already logged in (Have session_handle from any previous tool)
+        {ALREADY_AUTHENTICATED}
         - User ask for their authentication status
 
     When not to call:
@@ -186,7 +224,7 @@ async def check_auth_status(session_handle: uuid.UUID) -> Dict[str, Any]:
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -211,7 +249,7 @@ async def check_auth_status(session_handle: uuid.UUID) -> Dict[str, Any]:
                 "Call tool get_permissions, get_limits to show, then call tool get_setup_onboarding_flow to guide user with onboarding checklist",
                 "Ask user to choose where to start setup from the checklist",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     if info.get("login_error"):
@@ -224,7 +262,7 @@ async def check_auth_status(session_handle: uuid.UUID) -> Dict[str, Any]:
             "instruction": [
                 "Authorization error. Please login again using get_login_url tool with new session ID."
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     return {
@@ -233,20 +271,21 @@ async def check_auth_status(session_handle: uuid.UUID) -> Dict[str, Any]:
         "instruction": [
             "Not authenticated. Please use the get_login_url tool with new session ID to create a new session."
         ],
-        "trace_id": session_handle,
+        "session_handle": session_handle,
     }
 
 
 @mcp.tool()
 async def get_permissions(
-    session_handle: uuid.UUID, 
+    ctx: Context,
     location_id: Optional[str] = None,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Get permissions for the current user session generally or for a specific location.
 
     When to call:
-        - After successfully logged in on check_auth_status tool
+        {ALREADY_AUTHENTICATED}
         - User ask for permissions
         - User ask for permissions for a specific location
 
@@ -274,7 +313,7 @@ async def get_permissions(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -305,7 +344,7 @@ async def get_permissions(
                     "Show permissions to the user",
                     "Recommend some next actions based on the permissions"
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -321,13 +360,16 @@ async def get_permissions(
 
 
 @mcp.tool()
-async def get_limits(session_handle: uuid.UUID) -> Dict[str, Any]:
+async def get_limits(
+    ctx: Context,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     Get total and used limits for the current user session.
     If not provided, the tool can be used unlimitedly.
 
     When to call:
-        - After successfully logged in on check_auth_status tool
+        {ALREADY_AUTHENTICATED}
         - Tool search_sds got error with error code SUBSCRIPTION_CHAT_AGENT_SEARCH_LIMIT_EXCEEDED
         - Tool show_sds_detail got error with error code SUBSCRIPTION_CHAT_AGENT_GET_SDS_LIMIT_EXCEEDED
         - User ask for search limitations
@@ -349,7 +391,7 @@ async def get_limits(session_handle: uuid.UUID) -> Dict[str, Any]:
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -373,7 +415,7 @@ async def get_limits(session_handle: uuid.UUID) -> Dict[str, Any]:
                     "Recommend user to contact organization administrator if they are out of limits",
                     "Recommend search_sds tool for user to search if they still not reach the limits"
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -389,7 +431,10 @@ async def get_limits(session_handle: uuid.UUID) -> Dict[str, Any]:
 
 
 @mcp.tool(title="Get setup onboarding checklist")
-async def get_setup_onboarding_flow(session_handle: uuid.UUID) -> Dict[str, Any]:
+async def get_setup_onboarding_flow(
+    ctx: Context,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     Suggest user the best onboarding flow in checklist format.
 
@@ -416,7 +461,7 @@ async def get_setup_onboarding_flow(session_handle: uuid.UUID) -> Dict[str, Any]
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -463,7 +508,7 @@ async def get_setup_onboarding_flow(session_handle: uuid.UUID) -> Dict[str, Any]
                     "Display checklist for user to choose where to start setup",
                     "After user choose step, call tool get_setup_onboarding_step to get step instructions",
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -479,7 +524,11 @@ async def get_setup_onboarding_flow(session_handle: uuid.UUID) -> Dict[str, Any]
 
 
 @mcp.tool(title="Get setup onboarding step from checklist")
-async def get_setup_onboarding_step(session_handle: uuid.UUID, step_id: str) -> Dict[str, Any]:
+async def get_setup_onboarding_step(
+    ctx: Context,
+    step_id: str,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     Get setup onboarding step from checklist.
 
@@ -509,7 +558,7 @@ async def get_setup_onboarding_step(session_handle: uuid.UUID, step_id: str) -> 
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -522,7 +571,7 @@ async def get_setup_onboarding_step(session_handle: uuid.UUID, step_id: str) -> 
                 "If user have single location, finish this step",
                 "If user have multiple locations, call tool get_locations to show their current locations tree/hierarchy and recommend to create new location with add_location tool",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     elif step_id == "sds_file_setup":
         return {
@@ -537,7 +586,7 @@ async def get_setup_onboarding_step(session_handle: uuid.UUID, step_id: str) -> 
                 "If user have SDS files, recommend user to upload SDS files from their local computer or online sources using add_sds_by_uploading_sds_pdf_file, add_sds_by_url tool",
                 
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     elif step_id == "products_management":
         return {
@@ -567,15 +616,16 @@ async def get_setup_onboarding_step(session_handle: uuid.UUID, step_id: str) -> 
         "instruction": [
             "Step not found. Call tool get_setup_onboarding_flow to get onboarding checklist with valid step ids",
         ],
-        "trace_id": session_handle,
+        "session_handle": session_handle,
     }
 
 
 @mcp.tool(title="Request expert setup SDS library for user")
 async def request_expert_setup(
-    session_handle: uuid.UUID,
+    ctx: Context,
     sds_library_link: Optional[str] = None,
     additional_notes: Optional[str] = None,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Request expert setup SDS library for user.
@@ -612,7 +662,7 @@ async def request_expert_setup(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -636,7 +686,7 @@ async def request_expert_setup(
                     "Thank user for requesting expert setup",
                     "Introduce some next actions: search_sds, add_sds_by_uploading_sds_pdf_file, upload_product_list_excel_file, add_sds, get_customer_products, get_locations",
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -653,11 +703,12 @@ async def request_expert_setup(
 
 @mcp.tool(title="Get activity logs")
 async def get_activity_logs(
-    session_handle: uuid.UUID,
+    ctx: Context,
     location_id: Optional[str] = None,
     product_id: Optional[str] = None,
-    page: int = 1, 
+    page: int = 1,
     page_size: int = 10,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Get the activity logs for the current user session generally or for a specific location or product.
@@ -695,7 +746,7 @@ async def get_activity_logs(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -741,7 +792,7 @@ async def get_activity_logs(
                         "count": data.get("count", 0),
                     },
                     "instruction": instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
             except ValueError as e:
                 return {
@@ -754,7 +805,7 @@ async def get_activity_logs(
                         "count": data.get("count", 0),
                     },
                     "instruction": instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
         else:
             try:
@@ -771,14 +822,15 @@ async def get_activity_logs(
 
 @mcp.tool(title="Search SDSs from SDS Managers 16 millions global SDS database")
 async def search_sds(
-    session_handle: uuid.UUID,
-    keyword: str, 
+    ctx: Context,
+    keyword: str,
     scope: Literal["all", "in_used"] = "all",
-    page: int = 1, 
-    page_size: int = 10, 
+    page: int = 1,
+    page_size: int = 10,
     language_code: Optional[str] = None,
     region_code: Optional[str] = None,
     location_id: Optional[str] = None,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Search for Safety Data Sheets (SDS) in the SDS Managers 16 millions global SDS database.
@@ -833,7 +885,7 @@ async def search_sds(
         - Otherwise -> scope=all
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -878,7 +930,7 @@ async def search_sds(
                     "Suggest user to do external web search using find_sds_pdf_links_from_external_web tool if not found the SDS they want",
                     "If user find the SDS they want, recommend user these next actions: show_sds_detail, add_sds, match_sds_request (If user want to match the SDS to a SDS request)"
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -894,7 +946,11 @@ async def search_sds(
 
 
 @mcp.tool(title="Show SDS details")
-async def show_sds_detail(session_handle: uuid.UUID, sds_id: str) -> Dict[str, Any]:
+async def show_sds_detail(
+    ctx: Context,
+    sds_id: str,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     Retrieve detailed information for a specific SDS from the global database.
 
@@ -930,7 +986,7 @@ async def show_sds_detail(session_handle: uuid.UUID, sds_id: str) -> Dict[str, A
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -947,7 +1003,7 @@ async def show_sds_detail(session_handle: uuid.UUID, sds_id: str) -> Dict[str, A
                 "instruction": [
                     "Recommend user these next actions: add_sds, match_sds_request (If user want to match the SDS to a SDS request), search_sds (If user want to search for another SDS)"
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -964,8 +1020,9 @@ async def show_sds_detail(session_handle: uuid.UUID, sds_id: str) -> Dict[str, A
 
 @mcp.tool(title="Find SDS pdf links from external web")
 async def find_sds_pdf_links_from_external_web(
-    session_handle: uuid.UUID,
+    ctx: Context,
     links: List[str],
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     You will become an excellent SDS search engine expert, especially for hunting SDS direct pdf links. This tool is an endpoint for receiving web search result of SDS or MSDS pdf links from the you.
@@ -1009,7 +1066,7 @@ async def find_sds_pdf_links_from_external_web(
            ])
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1020,19 +1077,20 @@ async def find_sds_pdf_links_from_external_web(
         "instruction": [
             "Ask user if they want to add the SDS pdf link to customer's inventory by calling add_sds_by_url tool (If multiple links are found, ask user to choose)"
         ],
-        "trace_id": session_handle,
+        "session_handle": session_handle,
     }
 
 
 @mcp.tool(title="Get customer products")
 async def get_customer_products(
-    session_handle: uuid.UUID, 
-    keyword: Optional[str] = None, 
-    page: int = 1, 
+    ctx: Context,
+    keyword: Optional[str] = None,
+    page: int = 1,
     page_size: int = 10,
     language_code: Optional[str] = None,
     region_code: Optional[str] = None,
     location_id: Optional[str] = None,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Get all products (SDSs assigned to locations) in the customer's library/inventory.
@@ -1076,7 +1134,7 @@ async def get_customer_products(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1123,7 +1181,7 @@ async def get_customer_products(
                         "previous_page": int(page) - 1 if res.previous else None,
                     },
                     "instruction": recommend_instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
             except ValueError as e:
                 return {
@@ -1137,7 +1195,7 @@ async def get_customer_products(
                         "previous_page": int(page) - 1 if data.get("previous") else None,
                     },
                     "instruction": recommend_instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
         else:
             try:
@@ -1154,8 +1212,9 @@ async def get_customer_products(
 
 @mcp.tool(title="Show customer product detail")
 async def show_customer_product_detail(
-    session_handle: uuid.UUID, 
-    product_id: str
+    ctx: Context,
+    product_id: str,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Retrieve detailed information for a specific product (SDS assigned to a location) in the customer's inventory.
@@ -1190,7 +1249,7 @@ async def show_customer_product_detail(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1216,7 +1275,7 @@ async def show_customer_product_detail(
                         **substance_dto.model_dump(by_alias=True),
                     },
                     "instruction": recommend_instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
             except ValueError as e:
                 # Fallback to raw data if DTO creation fails
@@ -1228,7 +1287,7 @@ async def show_customer_product_detail(
                         **data,
                     },
                     "instruction": recommend_instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
         else:
             try:
@@ -1245,10 +1304,11 @@ async def show_customer_product_detail(
 
 @mcp.tool(title="Add SDS")
 async def add_sds(
-    session_handle: uuid.UUID, 
-    sds_id: str, 
+    ctx: Context,
+    sds_id: str,
     location_id: str,
     default_run: bool = True,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Add an SDS from the global database to a specific location in the customer's inventory.
@@ -1285,7 +1345,7 @@ async def add_sds(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1297,7 +1357,7 @@ async def add_sds(
                 "Ask user to confirm adding SDS (get detail via show_sds_detail tool) to location info (get detail via get_locations tool)",
                 "If user confirmed correct, call this tool again with default_run=False",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     endpoint = f"{BACKEND_URL}/location/{location_id}/addSDS/"
@@ -1323,7 +1383,7 @@ async def add_sds(
                     "Show information",
                     PRODUCT_RECOMMEND_INSTRUCTION,
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -1340,10 +1400,11 @@ async def add_sds(
 
 @mcp.tool(title="Move SDS")
 async def move_sds(
-    session_handle: uuid.UUID, 
-    product_id: str, 
+    ctx: Context,
+    product_id: str,
     location_id: str,
     default_run: bool = True,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Move a product (SDS assigned to a location) to a different location.
@@ -1382,7 +1443,7 @@ async def move_sds(
         {DEFAULT_RETURN_TEMPLATE}
     """
         
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
         
@@ -1394,7 +1455,7 @@ async def move_sds(
                 "Ask user to confirm moving product (get detail via show_customer_product_detail tool) to location info (get detail via get_locations tool)",
                 "If user confirmed correct, call this tool again with default_run=False",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     endpoint = f"{BACKEND_URL}/substance/{product_id}/move/"
@@ -1420,7 +1481,7 @@ async def move_sds(
                     "Show information",
                     PRODUCT_RECOMMEND_INSTRUCTION,
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -1437,10 +1498,11 @@ async def move_sds(
 
 @mcp.tool(title="Copy SDS to another location")
 async def copy_sds_to_another_location(
-    session_handle: uuid.UUID, 
-    product_id: str, 
+    ctx: Context,
+    product_id: str,
     location_id: str,
     default_run: bool = True,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Copy a product to another location, creating a duplicate with similar information.
@@ -1480,7 +1542,7 @@ async def copy_sds_to_another_location(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1492,7 +1554,7 @@ async def copy_sds_to_another_location(
                 "Ask user to confirm copying product (get detail via show_customer_product_detail tool) to location info (get detail via get_locations tool)",
                 "If user confirmed correct, call this tool again with default_run=False",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     endpoint = f"{BACKEND_URL}/substance/{product_id}/copy/"
@@ -1518,7 +1580,7 @@ async def copy_sds_to_another_location(
                     "Show information",
                     PRODUCT_RECOMMEND_INSTRUCTION,
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -1535,9 +1597,10 @@ async def copy_sds_to_another_location(
 
 @mcp.tool(title="Archive SDS")
 async def archive_sds(
-    session_handle: uuid.UUID, 
+    ctx: Context,
     product_id: str,
     default_run: bool = True,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Archive a product (SDS assigned to a location), removing it from active inventory.
@@ -1575,7 +1638,7 @@ async def archive_sds(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1587,7 +1650,7 @@ async def archive_sds(
                 "Ask user to confirm archiving product (get detail via show_customer_product_detail tool)",
                 "If user confirmed correct, call this tool again with default_run=False",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     endpoint = f"{BACKEND_URL}/substance/{product_id}/archive/"
@@ -1612,7 +1675,7 @@ async def archive_sds(
                     "Show information",
                     PRODUCT_RECOMMEND_INSTRUCTION,
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -1629,9 +1692,10 @@ async def archive_sds(
 
 @mcp.tool(title="Get location")
 async def get_locations(
-    session_handle: uuid.UUID, 
+    ctx: Context,
     location_name: Optional[str] = None,
     location_id: Optional[str] = None,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Retrieve the complete location hierarchy (tree structure) for the current user's organization.
@@ -1664,7 +1728,7 @@ async def get_locations(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1693,7 +1757,7 @@ async def get_locations(
                     "If no locations are found, recommend user to add a new location",
                     f"If have locations, {LOCATION_RECOMMEND_INSTRUCTION}",
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -1710,9 +1774,10 @@ async def get_locations(
 
 @mcp.tool(title="Add location")
 async def add_location(
-    session_handle: uuid.UUID, 
-    name: str, 
-    parent_location_id: Optional[str] = None
+    ctx: Context,
+    name: str,
+    parent_location_id: Optional[str] = None,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Create a new location in the organization's location hierarchy.
@@ -1749,7 +1814,7 @@ async def add_location(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1778,7 +1843,7 @@ async def add_location(
                     "Show information",
                     LOCATION_RECOMMEND_INSTRUCTION,
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -1795,10 +1860,11 @@ async def add_location(
 
 @mcp.tool(title="Get hazardous products with ingredients on restricted lists")
 async def get_hazardous_sds_on_restricted_lists(
-    session_handle: uuid.UUID, 
-    keyword: str = "", 
-    page: int = 1, 
-    page_size: int = 10
+    ctx: Context,
+    keyword: str = "",
+    page: int = 1,
+    page_size: int = 10,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Retrieve or search for hazardous products (SDS assigned to a location) containing ingredients/components on regulatory restriction lists.
@@ -1830,7 +1896,7 @@ async def get_hazardous_sds_on_restricted_lists(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -1875,7 +1941,7 @@ async def get_hazardous_sds_on_restricted_lists(
                     "If no results are found, recommend user to search_sds tool for finding SDS on global database",
                     "If have results, recommend user these next actions: show_customer_product_detail, move_sds, copy_sds, archive_sds"
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -1892,8 +1958,9 @@ async def get_hazardous_sds_on_restricted_lists(
 
 @mcp.tool(title="Add SDS by uploading SDS PDF file")
 async def add_sds_by_uploading_sds_pdf_file(
-    session_handle: uuid.UUID, 
-    location_id: str
+    ctx: Context,
+    location_id: str,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Generate an upload URL for user to upload an SDS PDF file to a specific location.
@@ -1932,7 +1999,7 @@ async def add_sds_by_uploading_sds_pdf_file(
         {DEFAULT_RETURN_TEMPLATE}
     """
     
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
         
@@ -1956,15 +2023,16 @@ async def add_sds_by_uploading_sds_pdf_file(
             "upload_url": upload_url,
         },
         "instruction": UPLOAD_SDS_PDF_STEP_INSTRUCTIONS,
-        "trace_id": session_handle,
+        "session_handle": session_handle,
     }
     
 
 @mcp.tool(title="Add SDS by URL")
 async def add_sds_by_url(
-    session_handle: uuid.UUID, 
-    url: str, 
-    location_id: str
+    ctx: Context,
+    url: str,
+    location_id: str,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Adding SDS by URL to a specific location.
@@ -2004,7 +2072,7 @@ async def add_sds_by_url(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
         
@@ -2050,7 +2118,7 @@ async def add_sds_by_url(
                     **data.model_dump(by_alias=True),
                 },
                 "instruction": ["call check_upload_sds_pdf_status tool with request_id"],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -2066,7 +2134,11 @@ async def add_sds_by_url(
 
 
 @mcp.tool(title="Check upload SDS file status")
-async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str) -> Dict[str, Any]:
+async def check_upload_sds_pdf_status(
+    ctx: Context,
+    request_id: str,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     Check the processing status for an uploaded SDS PDF file.
 
@@ -2105,7 +2177,7 @@ async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -2119,7 +2191,7 @@ async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str
             "instruction": [
                 "Upload session expired. Please use the add_sds_by_uploading_sds_pdf_file or add_sds_by_url tool to create a new upload session."
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     if upload_info.get("status") == "finished":
@@ -2136,7 +2208,7 @@ async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str
                 "Upload finished. Show information for current progress in data",
                 "Recommend user these next actions: show_customer_product_detail, add_sds_by_uploading_sds_pdf_file or add_sds_by_url (If user want to upload another SDS), copy_sds_to_another_location, archive_sds",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     elif not upload_info.get("status") in ["uploaded", "extracting"]:
         location_id = upload_info.get("location_id")
@@ -2150,7 +2222,7 @@ async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str
                 "instruction": [
                     "Not found location. Ask user to follow the step in add_sds_by_uploading_sds_pdf_file or add_sds_by_url tool."
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
 
         upload_url = f"{DOMAIN}/upload?session_id={session_handle}&department_id={location_id}&request_id={request_id}"
@@ -2168,7 +2240,7 @@ async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str
                 "upload_url": upload_url,
             },
             "instruction": UPLOAD_SDS_PDF_STEP_INSTRUCTIONS,
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     headers = {SDS_HEADER_NAME: f"{info.get('api_key')}"}
@@ -2201,7 +2273,7 @@ async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str
                     "If progress is not 100, call check_upload_status tool with request_id again",
                     "If progress is 100, recommend user these next actions: show_customer_product_detail, add_sds_by_uploading_sds_pdf_file or add_sds_by_url (If user want to upload another SDS), copy_sds_to_another_location, archive_sds",
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -2217,7 +2289,10 @@ async def check_upload_sds_pdf_status(session_handle: uuid.UUID, request_id: str
 
 
 @mcp.tool(title="Upload Product List")
-async def upload_product_list_excel_file(session_handle: uuid.UUID) -> Dict[str, Any]:
+async def upload_product_list_excel_file(
+    ctx: Context,
+    session_handle: Optional[uuid.UUID] = None,
+) -> Dict[str, Any]:
     f"""
     Generate an upload URL for user to upload a Product List Excel file for bulk SDS import.
 
@@ -2252,7 +2327,7 @@ async def upload_product_list_excel_file(session_handle: uuid.UUID) -> Dict[str,
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -2275,14 +2350,15 @@ async def upload_product_list_excel_file(session_handle: uuid.UUID) -> Dict[str,
             "upload_url": upload_url,
         },
         "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-        "trace_id": session_handle,
+        "session_handle": session_handle,
     }
 
 
 @mcp.tool(title="Validate uploaded Product List")
 async def validate_upload_product_list_excel_data(
-    session_handle: uuid.UUID, 
-    request_id: str
+    ctx: Context,
+    request_id: str,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Validate and extract column information from uploaded Product List Excel file.
@@ -2322,7 +2398,7 @@ async def validate_upload_product_list_excel_data(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -2336,7 +2412,7 @@ async def validate_upload_product_list_excel_data(
             "instruction": [
                 "Upload session expired. Please use the upload_product_list_excel_file tool to create a new upload session."
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     upload_url = f"{DOMAIN}/uploadProductList?session_id={session_handle}&request_id={request_id}"
@@ -2352,7 +2428,7 @@ async def validate_upload_product_list_excel_data(
             "instruction": [
                 "Already validated, call process_upload_product_list_excel_data tool with mapped_data as empty",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     elif upload_status == "processed":
         return {
@@ -2365,7 +2441,7 @@ async def validate_upload_product_list_excel_data(
             "instruction": [
                 "Already processed, call process_upload_product_list_excel_data tool to continue",
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     elif upload_status == "extracting":
         product_list_id = upload_info.get("product_list_id")
@@ -2381,7 +2457,7 @@ async def validate_upload_product_list_excel_data(
                 "instruction": [
                     "Already extracting, call check_upload_product_list_excel_data_status tool with product_list_id to continue",
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
     elif not upload_status in ["uploaded", "validated"]:
         error = "Upload not completed. Please try again."
@@ -2397,7 +2473,7 @@ async def validate_upload_product_list_excel_data(
                 "upload_url": upload_url,
             },
             "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     file_name = upload_info.get("file_name")
@@ -2412,7 +2488,7 @@ async def validate_upload_product_list_excel_data(
                 "upload_url": upload_url,
             },
             "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     total_row = upload_info.get("total_row")
@@ -2426,7 +2502,7 @@ async def validate_upload_product_list_excel_data(
                 "upload_url": upload_url,
             },
             "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     extracted_columns = upload_info.get("extracted_columns")
@@ -2440,7 +2516,7 @@ async def validate_upload_product_list_excel_data(
                 "upload_url": upload_url,
             },
             "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
     redis_client.set(upload_key, {
@@ -2461,16 +2537,17 @@ async def validate_upload_product_list_excel_data(
             "Ask user to confirm mapped data whether it is correct.",
             "If user confirmed correct, call and pass the mapped data to process_upload_product_list_excel_data tool",
         ],
-        "trace_id": session_handle,
+        "session_handle": session_handle,
     }
 
 
 @mcp.tool(title="Process uploaded Product List")
 async def process_upload_product_list_excel_data(
-    session_handle: uuid.UUID, 
+    ctx: Context,
     request_id: str,
-    mapped_data: dict, 
+    mapped_data: dict,
     auto_match_product: bool,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Process validated Product List Excel data and import products into inventory.
@@ -2514,7 +2591,7 @@ async def process_upload_product_list_excel_data(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -2528,7 +2605,7 @@ async def process_upload_product_list_excel_data(
             "instruction": [
                 "Upload session expired. Please use the add_sds_by_uploading_sds_pdf_file or add_sds_by_url tool to create a new upload session."
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     
     upload_url = f"{DOMAIN}/uploadProductList?session_id={session_handle}&request_id={request_id}"
@@ -2543,7 +2620,7 @@ async def process_upload_product_list_excel_data(
                 "error_message": "Validation error",
             },
             "instruction": ["Call validate_upload_product_list_excel_data tool again"],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     
     upload_status = upload_info.get("status")
@@ -2567,7 +2644,7 @@ async def process_upload_product_list_excel_data(
                 "instruction": [
                     "Already extracting, call check_upload_product_list_excel_data_status tool with product_list_id to continue",
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
     elif (
         not upload_status in ["validated", "processing"]
@@ -2580,7 +2657,7 @@ async def process_upload_product_list_excel_data(
                 "error_message": "Not validated",
             },
             "instruction": ["Call validate_upload_product_list_excel_data tool again"],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     else:
         redis_client.set(upload_key, {
@@ -2627,7 +2704,7 @@ async def process_upload_product_list_excel_data(
                     "upload_url": upload_url,
                 },
                 "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
 
         try:
@@ -2642,7 +2719,7 @@ async def process_upload_product_list_excel_data(
                     "upload_url": upload_url,
                 },
                 "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
 
         redis_client.set(upload_key, {
@@ -2689,7 +2766,7 @@ async def process_upload_product_list_excel_data(
                     "Show information for uploaded data",
                     "Call check_upload_product_list_excel_data_status with product_list_id for checking status of the upload process"
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -2710,14 +2787,15 @@ async def process_upload_product_list_excel_data(
                 "upload_url": upload_url,
             },
             "instruction": UPLOAD_PRODUCT_LIST_EXCEL_FILE_INSTRUCTIONS,
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
 
 
 @mcp.tool(title="Check upload Product List status")
 async def check_upload_product_list_excel_data_status(
-    session_handle: uuid.UUID, 
-    product_list_id: str
+    ctx: Context,
+    product_list_id: str,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Monitor the processing status for imported Product List Excel data.
@@ -2756,7 +2834,7 @@ async def check_upload_product_list_excel_data_status(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -2782,7 +2860,7 @@ async def check_upload_product_list_excel_data_status(
                     "If progress is not finished, call check_upload_product_list_excel_data_status tool with product_list_id again.",
                     "If progress is finished and there are unmatched products, suggest user to list them by calling get_sds_request tool with product_list_id from data."
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -2799,10 +2877,11 @@ async def check_upload_product_list_excel_data_status(
 
 @mcp.tool(title="Get list of product lists imported from the Excel files")
 async def get_uploaded_product_list(
-    session_handle: uuid.UUID,
+    ctx: Context,
     search_keyword: str = "",
-    page: int = 1, 
+    page: int = 1,
     page_size: int = 10,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Get the list of all product lists imported from the Excel files.
@@ -2829,7 +2908,7 @@ async def get_uploaded_product_list(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -2865,7 +2944,7 @@ async def get_uploaded_product_list(
                         ],
                     },
                     "instruction": instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
             except ValueError as e:
                 return {
@@ -2879,7 +2958,7 @@ async def get_uploaded_product_list(
                         "previous_page": int(page) - 1 if data.get("previous") else None,
                     },
                     "instruction": instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
         else:
             try:
@@ -2896,10 +2975,11 @@ async def get_uploaded_product_list(
 
 @mcp.tool(title="Get summary of a product list imported from the Excel file")
 async def get_product_list_summary(
-    session_handle: uuid.UUID,
+    ctx: Context,
     product_list_id: str,
-    page: int = 1, 
+    page: int = 1,
     page_size: int = 10,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Get the summary of a product list imported from the Excel file.
@@ -2933,7 +3013,7 @@ async def get_product_list_summary(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -2967,7 +3047,7 @@ async def get_product_list_summary(
                         ],
                     },
                     "instruction": instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
             except ValueError as e:
                 return {
@@ -2981,7 +3061,7 @@ async def get_product_list_summary(
                         "previous_page": int(page) - 1 if data.get("previous") else None,
                     },
                     "instruction": instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
         else:
             try:
@@ -2998,11 +3078,12 @@ async def get_product_list_summary(
     
 @mcp.tool(title="Get list of SDS Requests (Unmatched Products)")
 async def get_sds_request(
-    session_handle: uuid.UUID, 
-    search: str = "", 
+    ctx: Context,
+    search: str = "",
     product_list_id: str = "",
-    page: int = 1, 
-    page_size: int = 10
+    page: int = 1,
+    page_size: int = 10,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Retrieve SDS requests that have not been matched to any SDS in the global database.
@@ -3041,7 +3122,7 @@ async def get_sds_request(
         {DEFAULT_RETURN_TEMPLATE}
     """
         
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
     
@@ -3080,7 +3161,7 @@ async def get_sds_request(
                         "previous_page": int(page) - 1 if res.previous else None,
                     },
                     "instruction": recommend_instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
             except ValueError as e:
                 return {
@@ -3094,7 +3175,7 @@ async def get_sds_request(
                         "previous_page": int(page) - 1 if data.get("previous") else None,
                     },
                     "instruction": recommend_instruction,
-                    "trace_id": session_handle,
+                    "session_handle": session_handle,
                 }
         else:
             try:
@@ -3111,10 +3192,11 @@ async def get_sds_request(
 
 @mcp.tool(title="Match product request to a SDS")
 async def match_sds_request(
-    session_handle: uuid.UUID, 
-    request_id: str, 
-    sds_id: str, 
-    use_sds_data: bool
+    ctx: Context,
+    request_id: str,
+    sds_id: str,
+    use_sds_data: bool,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Link a SDS request (unmatched product) to an SDS from the SDS Managers 16 millions SDS global database.
@@ -3159,7 +3241,7 @@ async def match_sds_request(
         {DEFAULT_RETURN_TEMPLATE}
     """
 
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -3189,7 +3271,7 @@ async def match_sds_request(
                     "Show information",
                     "Recommend these next actions: get_sds_request (For continue matching SDS to the product request), show_customer_product_detail (For showing the product information), copy_sds_to_another_location (For copying the SDS to another location), archive_sds (For archiving the SDS)"
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
@@ -3206,11 +3288,12 @@ async def match_sds_request(
 
 @mcp.tool(title="Update product information")
 async def edit_product_data(
-    session_handle: uuid.UUID,
+    ctx: Context,
     product_id: str,
     sds_pdf_product_name: Optional[str] = None,
     chemical_name_synonyms: Optional[str] = None,
     external_system_id: Optional[str] = None,
+    session_handle: Optional[uuid.UUID] = None,
 ) -> Dict[str, Any]:
     f"""
     Edit editable fields of an product (SDS assigned to a location) in the customer's inventory.
@@ -3256,7 +3339,7 @@ async def edit_product_data(
         {DEFAULT_RETURN_TEMPLATE}
     """
         
-    info, is_expired = validate_session(session_handle)
+    info, is_expired = validate_session(session_handle, _extract_api_key(ctx))
     if is_expired:
         return info
 
@@ -3275,7 +3358,7 @@ async def edit_product_data(
             "instruction": [
                 "At least one field must be provided for update"
             ],
-            "trace_id": session_handle,
+            "session_handle": session_handle,
         }
     
     data = {}
@@ -3307,7 +3390,7 @@ async def edit_product_data(
                     "If the values match, tell the user: 'Update verified in customer library.' "
                     "If any mismatch is found, report which fields differ and suggest retrying the edit."
                 ],
-                "trace_id": session_handle,
+                "session_handle": session_handle,
             }
         else:
             try:
